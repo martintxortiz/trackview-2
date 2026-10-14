@@ -1,10 +1,11 @@
 import type { Metadata, Viewport } from "next";
-import { Inter } from "next/font/google";
+import { Inter_Tight } from "next/font/google";
 import "./globals.css";
 
-const inter = Inter({
+const interTight = Inter_Tight({
   variable: "--font-inter",
   subsets: ["latin"],
+  weight: ["300", "400", "500"],
 });
 
 export const metadata: Metadata = {
@@ -13,20 +14,19 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "oklch(1 0 0)" },
-    { media: "(prefers-color-scheme: dark)", color: "oklch(0.145 0 0)" },
-  ],
+  themeColor: "#0a0a0b",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${inter.variable} h-full antialiased`}
+      className={`${interTight.variable} dark h-full antialiased`}
       suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col font-sans">{children}</body>
+      <body className="flex min-h-full flex-col bg-background font-sans text-foreground">
+        {children}
+      </body>
     </html>
   );
 }
