@@ -1,0 +1,19 @@
+{
+  "tracks": 25,
+  "spaSamples": 1401,
+  "bounds": {
+    "cx": 234.705,
+    "cy": -674.2,
+    "spanX": 1269.89,
+    "spanY": 2040.12
+  },
+  "smoothN": 6973,
+  "speedDigest": "edd7832cd4a29f3e",
+  "zonesN": 3,
+  "zonesDigest": "7831a846daf85ba5",
+  "sidesDigest": "e2605831cff1562b",
+  "offsetDigest": "e500f023e47bc4d1",
+  "presetSpeedAmber": "speed",
+  "presetCustom": "custom",
+  "recommendedBrake": "red"
+}
