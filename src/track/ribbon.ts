@@ -399,3 +399,65 @@ export function segmentPositions(
   }
   return pos
 }
+
+/**
+ * Checkered start/finish stripe across `a` → `b`, `halfWidth` meters to each
+ * side along the track. `cols` cells span the track width, `rows` span the
+ * driving direction — 8×2 keeps the classic look without going thick.
+ * White squares are 1,1,1 and dark squares 0,0,0 (both exact in sRGB and
+ * linear, so no ColorManagement shift). Same winding-agnostic layout as
+ * segmentPositions (material is DoubleSide).
+ */
+export function checkeredSegmentPositions(
+  a: Xy,
+  b: Xy,
+  halfWidth: number,
+  up: number,
+  cols = 8,
+  rows = 2,
+): { positions: Float32Array; colors: Float32Array } {
+  const colsN = Math.max(1, Math.floor(cols))
+  const rowsN = Math.max(1, Math.floor(rows))
+  const dx = b[0] - a[0]
+  const dy = b[1] - a[1]
+  const len = Math.hypot(dx, dy) || 1
+  const nx = (-dy / len) * halfWidth
+  const ny = (dx / len) * halfWidth
+  const positions = new Float32Array(colsN * rowsN * 6 * 3)
+  const colors = new Float32Array(colsN * rowsN * 6 * 3)
+  let o = 0
+  let c = 0
+  const push = (x: number, y: number, v: number) => {
+    const [sx, sy, sz] = toScene(x, y, up)
+    positions[o++] = sx
+    positions[o++] = sy
+    positions[o++] = sz
+    colors[c++] = v
+    colors[c++] = v
+    colors[c++] = v
+  }
+  for (let ci = 0; ci < colsN; ci++) {
+    const t0 = ci / colsN
+    const t1 = (ci + 1) / colsN
+    for (let ri = 0; ri < rowsN; ri++) {
+      const s0 = -1 + (2 * ri) / rowsN
+      const s1 = -1 + (2 * (ri + 1)) / rowsN
+      const p00x = a[0] + dx * t0 + nx * s0
+      const p00y = a[1] + dy * t0 + ny * s0
+      const p10x = a[0] + dx * t1 + nx * s0
+      const p10y = a[1] + dy * t1 + ny * s0
+      const p11x = a[0] + dx * t1 + nx * s1
+      const p11y = a[1] + dy * t1 + ny * s1
+      const p01x = a[0] + dx * t0 + nx * s1
+      const p01y = a[1] + dy * t0 + ny * s1
+      const v = (ci + ri) % 2 === 0 ? 1 : 0
+      push(p00x, p00y, v)
+      push(p10x, p10y, v)
+      push(p11x, p11y, v)
+      push(p00x, p00y, v)
+      push(p11x, p11y, v)
+      push(p01x, p01y, v)
+    }
+  }
+  return { positions, colors }
+}

@@ -16,11 +16,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
-import {
-  iconActionClass,
-  liveActionBaseClass,
-  toolbarIconClass,
-} from '@/components/icon-action'
+import { IconButton, iconButtonClass, iconClass } from '@/components/icon-button'
 
 const SECTION_TABS: ToolbarTab[] = [
   { id: 'telemetry', label: 'Overview' },
@@ -37,29 +33,28 @@ export function TopBar() {
   const [isLive, setIsLive] = useState(true)
 
   return (
-    <div className="flex w-full min-w-0 items-center gap-2">
+    <div className="flex w-full min-w-0 items-center gap-1">
       <ToolbarFrame className="shrink-0 gap-1">
-        <button type="button" className={iconActionClass} aria-label="Back">
-          <IconChevronLeft className={toolbarIconClass} aria-hidden />
-        </button>
-        <button
-          type="button"
-          className={[
-            liveActionBaseClass,
-            isLive
-              ? 'bg-[var(--tv-live)] text-white/90 hover:brightness-110'
-              : 'bg-secondary text-muted-foreground hover:text-foreground/80',
-          ].join(' ')}
+        <IconButton aria-label="Back">
+          <IconChevronLeft className={iconClass} aria-hidden />
+        </IconButton>
+        <IconButton
+          filled
           aria-label={isLive ? 'Live' : 'Replay'}
           aria-pressed={isLive}
           onClick={() => setIsLive((live) => !live)}
+          className={
+            isLive
+              ? 'bg-[var(--tv-live)] text-white/90 hover:brightness-110'
+              : 'bg-secondary text-muted-foreground hover:text-foreground/80'
+          }
         >
           {isLive ? (
-            <IconBroadcast className={toolbarIconClass} aria-hidden />
+            <IconBroadcast className={iconClass} aria-hidden />
           ) : (
-            <IconKeyframesFilled className={toolbarIconClass} aria-hidden />
+            <IconKeyframesFilled className={iconClass} aria-hidden />
           )}
-        </button>
+        </IconButton>
       </ToolbarFrame>
       <ToolbarFrame className="min-w-0 flex-1">
         <Toolbar
@@ -71,11 +66,8 @@ export function TopBar() {
       </ToolbarFrame>
       <ToolbarFrame className="shrink-0 gap-1">
         <DropdownMenu>
-          <DropdownMenuTrigger
-            className={iconActionClass}
-            aria-label="More options"
-          >
-            <IconBellFilled className={toolbarIconClass} aria-hidden />
+          <DropdownMenuTrigger className={`${iconButtonClass} bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground`} aria-label="More options">
+            <IconBellFilled className={iconClass} aria-hidden />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem>Export data</DropdownMenuItem>
@@ -83,10 +75,7 @@ export function TopBar() {
           </DropdownMenuContent>
         </DropdownMenu>
         <DropdownMenu>
-          <DropdownMenuTrigger
-            className={iconActionClass}
-            aria-label="Account menu"
-          >
+          <DropdownMenuTrigger className={`${iconButtonClass} bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground`} aria-label="Account menu">
             <Avatar className="size-7">
               <AvatarImage src="https://api.dicebear.com/10.x/glyphs/svg?seed=bqiwb6hy" />
               <AvatarFallback>MO</AvatarFallback>

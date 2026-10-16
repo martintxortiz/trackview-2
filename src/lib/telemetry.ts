@@ -1,5 +1,7 @@
-export const SECTOR_GREEN = '#4ade4a'
-export const SECTOR_RED = '#ff3b30'
+import { trackTelemetry } from '@/track/real-telemetry'
+
+const GREEN = '#4ade4a'
+const RED = '#ff3b30'
 
 export const SECTORS = [
   { name: 'S1', delta: -0.142, flex: 1.2 },
@@ -14,102 +16,125 @@ export const SECTORS = [
 
 export type Sector = (typeof SECTORS)[number]
 
-export const SECTOR_TOTAL_FLEX = SECTORS.reduce(
-  (sum, sector) => sum + sector.flex,
-  0,
-)
+const TOTAL_FLEX = SECTORS.reduce((sum, s) => sum + s.flex, 0)
 
-export const LAP_DURATION_MS = 86_243
+const SPA = trackTelemetry('spa')
+if (!SPA) {
+  throw new Error('Missing Spa FastF1 telemetry (src/track/data/spa-telemetry.json)')
+}
+
+/** Spa Q flying lap duration from FastF1 (series B / comparison). */
+export const LAP_DURATION_MS = SPA.b.lap_ms
 export const PLAYBACK_STEP_MS = 100
 export const PLAYBACK_JUMP_MS = 1_000
 
-/** Sampled distance samples across one lap (for chart x-axis). */
-export const CHART_POINT_COUNT = 250
-export const CHART_Y_MIN = 60
-export const CHART_Y_MAX = 330
+export const PLAYBACK_RATES = [0.25, 0.5, 1, 2, 4] as const
+export type PlaybackRate = (typeof PLAYBACK_RATES)[number]
+
+export const CHART_POINT_COUNT = SPA.a.speed_kmh.length
+/** Reference trace (faster Q lap). */
 export const SERIES_A_COLOR = '#c4c9cf'
-/** Soft teal chart accent — pairs with the darker palette. */
-export const SERIES_B_COLOR = '#7dd4bc'
+/** Driven / comparison trace and the map highlight. */
+export const SERIES_B_COLOR = '#349cff'
+
+const clamp = (n: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, n))
+
+export const CHART_SERIES_A = SPA.a.speed_kmh
+export const CHART_SERIES_B = SPA.b.speed_kmh
+export const CHART_THROTTLE_A = SPA.a.throttle
+export const CHART_THROTTLE_B = SPA.b.throttle
+export const CHART_BRAKE_A = SPA.a.brake
+export const CHART_BRAKE_B = SPA.b.brake
+
+const N = CHART_POINT_COUNT
+const speedA = CHART_SERIES_A
+const speedB = CHART_SERIES_B
 
 /**
- * Corner profile for a synthetic speed trace:
- * apex at `at` (0–1 lap distance), floor speed, braking sharpness, exit sharpness.
+ * Cumulative time along distance for the driven car (series B).
+ * Index i ↔ distance i/(N-1); values normalized to [0, 1] lap time.
  */
-const CORNERS = [
-  { at: 0.08, floor: 118, brake: 0.018, exit: 0.045 },
-  { at: 0.18, floor: 92, brake: 0.014, exit: 0.038 },
-  { at: 0.27, floor: 145, brake: 0.012, exit: 0.04 },
-  { at: 0.36, floor: 78, brake: 0.016, exit: 0.042 },
-  { at: 0.48, floor: 168, brake: 0.02, exit: 0.05 },
-  { at: 0.58, floor: 105, brake: 0.013, exit: 0.036 },
-  { at: 0.69, floor: 88, brake: 0.015, exit: 0.04 },
-  { at: 0.78, floor: 132, brake: 0.017, exit: 0.044 },
-  { at: 0.9, floor: 98, brake: 0.014, exit: 0.048 },
-] as const
+const TIME_AT_DISTANCE = (() => {
+  const acc = new Float64Array(N)
+  for (let i = 1; i < N; i++) {
+    const v0 = speedB[i - 1]!
+    const v1 = speedB[i]!
+    const avg = Math.max(1, (v0 + v1) / 2)
+    // Δs ∝ 1/(N-1); Δt ∝ Δs / v — only relative shape matters before normalize.
+    acc[i] = acc[i - 1]! + 1 / avg
+  }
+  const total = acc[N - 1]! || 1
+  for (let i = 0; i < N; i++) acc[i]! /= total
+  return acc
+})()
 
-const TOP_SPEED = 318
-const CRUISE = 286
-
-function clamp(n: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, n))
+function sampleTable(table: Float64Array, ratio: number) {
+  const maxIdx = table.length - 1
+  if (maxIdx <= 0) return table[0] ?? 0
+  const pos = clamp(ratio, 0, 1) * maxIdx
+  const i = Math.floor(pos)
+  const a = table[i]!
+  return a + ((table[Math.min(i + 1, maxIdx)]! - a) * (pos - i))
 }
 
-function smoothstep(edge0: number, edge1: number, x: number) {
-  const t = clamp((x - edge0) / (edge1 - edge0), 0, 1)
-  return t * t * (3 - 2 * t)
+/** Distance fraction → lap-time fraction (driven car). */
+export function distanceRatioToTime(distanceRatio: number) {
+  return sampleTable(TIME_AT_DISTANCE, distanceRatio)
 }
 
-/** Build a lap speed (km/h) at normalized distance `t` in [0, 1]. */
-function speedAt(t: number, bias: number): number {
-  let speed = CRUISE + bias * 4
+/** Lap-time fraction → distance fraction (driven car). */
+export function timeRatioToDistance(timeRatio: number) {
+  const target = clamp(timeRatio, 0, 1)
+  if (target <= 0) return 0
+  if (target >= 1) return 1
 
-  // Long straight peaks between corner clusters
-  const straightBoost =
-    32 * Math.sin(Math.PI * smoothstep(0.38, 0.46, t)) *
-      (1 - smoothstep(0.46, 0.52, t)) +
-    26 * Math.sin(Math.PI * smoothstep(0.8, 0.86, t)) *
-      (1 - smoothstep(0.86, 0.94, t))
-  speed += straightBoost
-
-  for (const corner of CORNERS) {
-    const entry = corner.at - corner.brake
-    const exit = corner.at + corner.exit
-    if (t < entry || t > exit) continue
-
-    const floor = corner.floor + bias * 6
-    if (t <= corner.at) {
-      const k = smoothstep(entry, corner.at, t)
-      // Sharp braking into apex (slightly eased near the floor)
-      const brakeCurve = k * k * (2 - k)
-      speed = speed * (1 - brakeCurve) + floor * brakeCurve
-    } else {
-      const k = smoothstep(corner.at, exit, t)
-      // Progressive exit acceleration
-      const exitCurve = Math.sqrt(k)
-      speed = floor * (1 - exitCurve) + speed * exitCurve
-    }
+  let lo = 0
+  let hi = N - 1
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if ((TIME_AT_DISTANCE[mid] ?? 0) < target) lo = mid + 1
+    else hi = mid
   }
 
-  // Small high-frequency wobble so the line isn't perfectly synthetic
-  const wobble =
-    Math.sin(t * 71.3) * 1.4 + Math.sin(t * 113.7 + bias) * 0.9
-  return clamp(Math.round(speed + wobble), 70, TOP_SPEED)
+  const i = Math.max(1, lo)
+  const t0 = TIME_AT_DISTANCE[i - 1]!
+  const t1 = TIME_AT_DISTANCE[i]!
+  const span = t1 - t0 || 1
+  const u = (target - t0) / span
+  return (i - 1 + u) / (N - 1)
 }
 
-function buildSeries(bias: number): number[] {
-  const out: number[] = []
-  for (let i = 0; i < CHART_POINT_COUNT; i++) {
-    out.push(speedAt(i / (CHART_POINT_COUNT - 1), bias))
+/** Total lap delta (s) — B relative to A from real lap times. */
+const TOTAL_DELTA = (SPA.b.lap_ms - SPA.a.lap_ms) / 1000
+
+/** Cumulative time delta of B relative to A, scaled to end on the lap total. */
+function buildDelta(): number[] {
+  const raw: number[] = [0]
+  for (let i = 1; i < N; i++) {
+    raw.push(raw[i - 1]! + 1 / speedB[i]! - 1 / speedA[i]!)
   }
-  return out
+  const end = raw[raw.length - 1]!
+  const scale = end === 0 ? 0 : TOTAL_DELTA / end
+  return raw.map((v) => Math.round(v * scale * 1000) / 1000)
 }
 
-export const CHART_POINTS = Array.from(
-  { length: CHART_POINT_COUNT },
-  (_, i) => i,
-)
-export const CHART_SERIES_A = buildSeries(3)
-export const CHART_SERIES_B = buildSeries(-3)
+export const CHART_DELTA = buildDelta()
+
+/** Tick marks around the real delta range. */
+export const CHART_DELTA_TICKS = (() => {
+  const lo = Math.min(...CHART_DELTA, TOTAL_DELTA, 0)
+  const hi = Math.max(...CHART_DELTA, TOTAL_DELTA, 0)
+  const pad = Math.max(0.05, (hi - lo) * 0.15)
+  const min = Math.floor((lo - pad) * 20) / 20
+  const max = Math.ceil((hi + pad) * 20) / 20
+  const step = Math.max(0.05, Math.round(((max - min) / 4) * 20) / 20)
+  const ticks: number[] = []
+  for (let v = min; v <= max + 1e-9; v += step) {
+    ticks.push(Math.round(v * 100) / 100)
+  }
+  return ticks.length >= 3 ? ticks : [-0.1, -0.05, 0, 0.05, 0.1]
+})()
 
 export function formatDelta(delta: number) {
   return `${delta > 0 ? '+' : ''}${delta.toFixed(3)}`
@@ -118,188 +143,34 @@ export function formatDelta(delta: number) {
 export function sampleSeries(series: readonly number[], ratio: number) {
   const maxIdx = series.length - 1
   if (maxIdx <= 0) return series[0] ?? 0
-  const pos = Math.min(1, Math.max(0, ratio)) * maxIdx
+  const pos = clamp(ratio, 0, 1) * maxIdx
   const i = Math.floor(pos)
-  const t = pos - i
   const a = series[i]!
-  const b = series[Math.min(i + 1, maxIdx)]!
-  return a + (b - a) * t
+  return a + ((series[Math.min(i + 1, maxIdx)]! - a) * (pos - i))
 }
 
 export function formatLapTime(ms: number) {
   const totalSec = Math.max(0, ms) / 1000
   const minutes = Math.floor(totalSec / 60)
-  const seconds = totalSec - minutes * 60
-  return `${minutes}:${seconds.toFixed(3).padStart(6, '0')}`
+  return `${minutes}:${(totalSec - minutes * 60).toFixed(3).padStart(6, '0')}`
+}
+
+export function formatPlaybackRate(rate: number) {
+  if (rate === 1) return '1×'
+  if (Number.isInteger(rate)) return `${rate}×`
+  return `${rate}×`
 }
 
 export function sectorAccent(delta: number) {
-  return delta <= 0 ? SECTOR_GREEN : SECTOR_RED
+  return delta <= 0 ? GREEN : RED
 }
 
 export function sectorAtRatio(ratio: number): Sector {
-  const clamped = Math.min(1, Math.max(0, ratio))
+  const clamped = clamp(ratio, 0, 1)
   let acc = 0
   for (const sector of SECTORS) {
-    acc += sector.flex / SECTOR_TOTAL_FLEX
+    acc += sector.flex / TOTAL_FLEX
     if (clamped <= acc) return sector
   }
-  return SECTORS[SECTORS.length - 1]
-}
-
-export type VehicleState = {
-  speed: number
-  throttle: number
-  brake: number
-  gear: number
-  rpm: number
-  steerDeg: number
-  abs: boolean
-  tc: boolean
-  fuelL: number
-}
-
-/** Chassis / handling metrics derived from the same lap sample. */
-export type DynamicsState = {
-  latG: number
-  longG: number
-  yawRate: number
-  slipAngle: number
-  rollDeg: number
-}
-
-const GEAR_TOPS = [0, 85, 120, 155, 195, 240, 280, TOP_SPEED] as const
-
-function gearFromSpeed(speed: number) {
-  for (let gear = 1; gear < GEAR_TOPS.length; gear++) {
-    if (speed < GEAR_TOPS[gear]!) return gear
-  }
-  return 7
-}
-
-function rpmFromSpeed(speed: number, gear: number, throttle: number) {
-  const lo = GEAR_TOPS[gear - 1] ?? 0
-  const hi = GEAR_TOPS[gear] ?? TOP_SPEED
-  const span = Math.max(1, hi - lo)
-  const inGear = clamp((speed - lo) / span, 0, 1)
-  const base = 4200 + inGear * 3000
-  return Math.round(clamp(base + throttle * 6, 3800, 7800))
-}
-
-/** Instant vehicle inputs derived from the same synthetic lap as the chart. */
-export function sampleVehicleState(
-  ratio: number,
-  bias: number,
-  fuelStartL: number,
-): VehicleState {
-  const t = clamp(ratio, 0, 1)
-  const speed = speedAt(t, bias)
-
-  let brake = 0
-  let throttle = 0
-  let steerDeg = 0
-  let inCorner = false
-
-  for (let i = 0; i < CORNERS.length; i++) {
-    const corner = CORNERS[i]!
-    const entry = corner.at - corner.brake
-    const exit = corner.at + corner.exit
-    if (t < entry || t > exit) continue
-
-    inCorner = true
-    const sign = i % 2 === 0 ? -1 : 1
-    const peakSteer = 18 + (180 - corner.floor) * 0.22
-
-    if (t <= corner.at) {
-      const k = smoothstep(entry, corner.at, t)
-      const brakeCurve = k * k * (2 - k)
-      brake = Math.round(28 + brakeCurve * 72)
-      throttle = Math.round((1 - brakeCurve) * 12)
-      steerDeg = Math.round(sign * peakSteer * (0.35 + brakeCurve * 0.65))
-    } else {
-      const k = smoothstep(corner.at, exit, t)
-      const exitCurve = Math.sqrt(k)
-      throttle = Math.round(35 + exitCurve * 65)
-      brake = Math.round((1 - exitCurve) * 10)
-      steerDeg = Math.round(sign * peakSteer * (1 - exitCurve * 0.85))
-    }
-    break
-  }
-
-  if (!inCorner) {
-    const prev = speedAt(Math.max(0, t - 0.004), bias)
-    const delta = speed - prev
-    if (delta < -0.8) {
-      brake = Math.round(clamp(-delta * 18, 8, 55))
-      throttle = 0
-    } else {
-      throttle = Math.round(clamp(70 + delta * 10 + bias, 55, 100))
-      brake = 0
-    }
-    steerDeg = Math.round(Math.sin(t * 36 + bias) * 3)
-  }
-
-  const gear = gearFromSpeed(speed)
-  const rpm = rpmFromSpeed(speed, gear, throttle)
-  const abs = brake >= 70
-  const tc = throttle >= 80 && speed < 160 && inCorner
-  const burn = 0.2 + bias * 0.01
-  const fuelL = Math.max(0, fuelStartL * (1 - t * burn))
-
-  return {
-    speed,
-    throttle,
-    brake,
-    gear,
-    rpm,
-    steerDeg,
-    abs,
-    tc,
-    fuelL: Math.round(fuelL * 10) / 10,
-  }
-}
-
-/** Instant handling loads derived from vehicle inputs at lap progress. */
-export function sampleDynamicsState(
-  ratio: number,
-  bias: number,
-  fuelStartL: number,
-): DynamicsState {
-  const state = sampleVehicleState(ratio, bias, fuelStartL)
-  const speedMs = state.speed / 3.6
-  const steerRad = (state.steerDeg * Math.PI) / 180
-
-  const latG = clamp(
-    (speedMs * speedMs * Math.tan(steerRad)) / 9.81 / 48 +
-      Math.sin(ratio * 41 + bias) * 0.08,
-    -2.4,
-    2.4,
-  )
-  const longG = clamp(
-    (state.throttle - state.brake) / 55 + Math.sin(ratio * 19) * 0.04,
-    -1.8,
-    1.4,
-  )
-  const yawRate = clamp(
-    state.steerDeg * (0.35 + speedMs / 90) + Math.sin(ratio * 53) * 1.2,
-    -55,
-    55,
-  )
-  const slipAngle = clamp(
-    state.steerDeg * 0.22 +
-      (state.throttle > 70 ? (state.throttle - 70) * 0.08 : 0) -
-      (state.brake > 50 ? (state.brake - 50) * 0.05 : 0) +
-      bias * 0.15,
-    -12,
-    12,
-  )
-  const rollDeg = clamp(latG * 1.35 + Math.sin(ratio * 27) * 0.2, -4.5, 4.5)
-
-  return {
-    latG: Math.round(latG * 100) / 100,
-    longG: Math.round(longG * 100) / 100,
-    yawRate: Math.round(yawRate * 10) / 10,
-    slipAngle: Math.round(slipAngle * 10) / 10,
-    rollDeg: Math.round(rollDeg * 10) / 10,
-  }
+  return SECTORS[SECTORS.length - 1]!
 }

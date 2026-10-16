@@ -1,7 +1,7 @@
 'use client'
 
 import {
-  useEffect,
+  memo,
   useLayoutEffect,
   useRef,
   useState,
@@ -18,8 +18,21 @@ import {
   useSpring,
   useTransform,
 } from 'motion/react'
-import { usePlayback } from '@/components/playback-context'
 import {
+  hoverSuppress,
+  usePlayback,
+  usePlaybackActions,
+} from '@/components/playback-context'
+import {
+  HOVER_TIP_SPRING,
+  REDUCED_TIP_TEXT_TRANSITION,
+  TIP_APPEAR_TRANSITION,
+  TIP_TEXT_TRANSITION,
+  reducedTipTextVariants,
+  tipTextVariants,
+} from '@/lib/hover-tip-animation'
+import {
+  distanceRatioToTime,
   formatDelta,
   formatLapTime,
   LAP_DURATION_MS,
@@ -29,40 +42,131 @@ import {
 } from '@/lib/telemetry'
 import type { TelemetryChartHandle } from '@/components/telemetry-chart'
 
-type HoverTip = {
-  overBar: boolean
-  name: string
-  delta: number
-  accent: string
-  dir: number
+type HoverTip =
+  | { overBar: false; dir: number }
+  | { overBar: true; name: string; delta: number; accent: string; dir: number }
+
+/** Sector segments — memo so the 60fps playhead never re-renders them. */
+const Segments = memo(function Segments({
+  activeName,
+  onHover,
+  onLeave,
+}: {
+  activeName: string | null
+  onHover: (clientX: number, clientY: number) => void
+  onLeave: () => void
+}) {
+  return (
+    <div className="flex h-2.5 w-full gap-px overflow-hidden rounded-[2px]">
+      {SECTORS.map((sector) => {
+        const accent = sectorAccent(sector.delta)
+        return (
+          <button
+            key={sector.name}
+            type="button"
+            className="relative h-full cursor-pointer rounded-none transition-colors duration-100 focus-visible:outline-none"
+            style={{
+              flex: sector.flex,
+              backgroundColor:
+                activeName === sector.name
+                  ? accent
+                  : 'color-mix(in srgb, var(--ink) 48%, transparent)',
+            }}
+            aria-label={`${sector.name}, ${formatDelta(sector.delta)}`}
+            onFocus={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect()
+              onHover(rect.left + rect.width / 2, rect.top + rect.height / 2)
+            }}
+            onBlur={onLeave}
+          />
+        )
+      })}
+    </div>
+  )
+})
+
+/** Vertical mark clipped to its parent. Parent height is the bound. */
+function MarkLine({ at, dim = false }: { at: number; dim?: boolean }) {
+  return (
+    <div
+      aria-hidden
+      className={`pointer-events-none absolute inset-y-0 z-30 w-[2px] -translate-x-1/2 ${dim ? 'bg-foreground/20' : 'bg-foreground'}`}
+      style={{ left: `${at * 100}%` }}
+    />
+  )
 }
 
-const tipTextVariants = {
-  enter: (dir: number) => ({
-    x: dir * 28,
-    opacity: 0,
-    filter: 'blur(8px)',
-  }),
-  center: {
-    x: 0,
-    opacity: 1,
-    filter: 'blur(0px)',
-  },
-  exit: (dir: number) => ({
-    x: dir * -28,
-    opacity: 0,
-    filter: 'blur(8px)',
-  }),
+/** Timeline track on top of the chart. Lines stay inside the track only. */
+function TimelineBar({
+  barRef,
+  activeName,
+  onHover,
+  onLeave,
+}: {
+  barRef: RefObject<HTMLDivElement | null>
+  activeName: string | null
+  onHover: (clientX: number, clientY: number) => void
+  onLeave: () => void
+}) {
+  const { displayProgress, progress, isPreviewing } = usePlayback()
+  return (
+    <div
+      ref={barRef}
+      className="relative flex h-4.5 w-full items-center"
+      role="slider"
+      aria-valuenow={Math.round(displayProgress * 100)}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-label="Timeline"
+    >
+      <div className="relative h-2.5 w-full">
+        <div className="absolute inset-0 overflow-hidden rounded-[2px]">
+          <Segments activeName={activeName} onHover={onHover} onLeave={onLeave} />
+          <div
+            className="pointer-events-none absolute inset-y-0 right-0 bg-card/70"
+            style={{ width: `${(1 - displayProgress) * 100}%` }}
+          />
+          {isPreviewing ? <MarkLine at={progress} dim /> : null}
+          <MarkLine at={displayProgress} />
+        </div>
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 z-40 flex -translate-x-1/2 items-center"
+          style={{ left: `${displayProgress * 100}%` }}
+        >
+          <div className="size-2 rounded-[2px] bg-foreground shadow-[0_0_0_2px_var(--card)]" />
+        </div>
+      </div>
+    </div>
+  )
 }
 
-const reducedTipTextVariants = {
-  enter: { opacity: 0 },
-  center: { opacity: 1 },
-  exit: { opacity: 0 },
+/** Playhead inside the chart box only — the gap above stays empty. */
+function ChartSlotLines() {
+  const { displayProgress, progress, isPreviewing } = usePlayback()
+  return (
+    <>
+      {isPreviewing ? <MarkLine at={progress} dim /> : null}
+      <MarkLine at={displayProgress} />
+    </>
+  )
 }
 
-function subscribeClient() {
-  return () => {}
+/** Pushes the true play position to the chart's dimmed ghost markers while
+ *  previewing. Subscribes on its own so the scrubber shell never re-renders
+ *  on tick; the chart updates imperatively (all series, all modes). */
+function ChartPlaySync({
+  chartRef,
+  chartKey,
+}: {
+  chartRef: RefObject<TelemetryChartHandle | null>
+  chartKey: ReactNode
+}) {
+  const { progress, isPreviewing } = usePlayback()
+  useLayoutEffect(() => {
+    chartRef.current?.setPlayRatio(isPreviewing ? progress : null)
+  }, [chartRef, progress, isPreviewing, chartKey])
+  return null
 }
 
 export function TimelineScrubber({
@@ -74,259 +178,185 @@ export function TimelineScrubber({
   chartRef?: RefObject<TelemetryChartHandle | null>
   focusLocked?: boolean
 }) {
-  const {
-    displayProgress,
-    seekRatio,
-    setPreviewRatio,
-    previewGeneration,
-  } = usePlayback()
-  const reduceMotion = useReducedMotion()
-  const overlayReady = useSyncExternalStore(
-    subscribeClient,
+  // Stable actions only — this shell never re-renders on tick.
+  const { seekRatio, setPreviewRatio } = usePlaybackActions()
+  const [hoverTip, setHoverTip] = useState<HoverTip | null>(null)
+  // Portal target exists only on the client — false during SSR/hydration.
+  const mounted = useSyncExternalStore(
+    () => () => {},
     () => true,
     () => false,
   )
-  const [hoverTip, setHoverTip] = useState<HoverTip | null>(null)
-  const [trackWidth, setTrackWidth] = useState(1)
-  const [dotTop, setDotTop] = useState(0)
 
-  const timelineRef = useRef<HTMLDivElement>(null)
   const scrubberRef = useRef<HTMLDivElement>(null)
+  const barRef = useRef<HTMLDivElement>(null)
   const tipRef = useRef<HTMLDivElement>(null)
   const timeTextRef = useRef<HTMLSpanElement>(null)
   const pctTextRef = useRef<HTMLSpanElement>(null)
-  const lastHoverX = useRef<number | null>(null)
+  const lastX = useRef<number | null>(null)
+  const lastRatio = useRef(0)
+  const tipHalf = useRef(40)
   const tipDir = useRef(1)
   const hoveringRef = useRef(false)
-  const suppressUntilMoveRef = useRef(false)
+  const overChartRef = useRef(false)
   const scrubberLeftRef = useRef(0)
-  const scrubberRightRef = useRef(0)
-  const timelineLeftRef = useRef(0)
-  const timelineWidthRef = useRef(1)
-  const timelineTopRef = useRef(0)
-  const timelineBottomRef = useRef(0)
-  const tipHalfRef = useRef(48)
-  const tipEdgePad = 6
+  const scrubberWidthRef = useRef(1)
+  // Bar x-mapping — seek, hover and the chart share the track width.
+  const barLeftRef = useRef(0)
+  const barWidthRef = useRef(1)
+  const reduceMotion = useReducedMotion()
 
+  // Spring-smoothed tip follower — transform-only, settles and stops.
   const hoverX = useMotionValue(0)
-  /** OA CHART spring — crosshair / tip follower. */
-  const smoothX = useSpring(hoverX, {
-    stiffness: 300,
-    damping: 28,
-    mass: 0.2,
-  })
+  const smoothX = useSpring(hoverX, HOVER_TIP_SPRING)
+  /** Viewport x clamped so the tip stays fully inside the scrubber edges. */
   const tipX = useTransform(smoothX, (x) => {
-    const half = tipHalfRef.current
-    const min = scrubberLeftRef.current + half + tipEdgePad
-    const max = scrubberRightRef.current - half - tipEdgePad
-    if (max <= min) {
-      return (scrubberLeftRef.current + scrubberRightRef.current) / 2
-    }
-    return Math.min(max, Math.max(min, x))
+    const half = tipHalf.current
+    const left = scrubberLeftRef.current
+    const right = left + scrubberWidthRef.current
+    if (scrubberWidthRef.current <= half * 2) return left + scrubberWidthRef.current / 2
+    return Math.min(right - half, Math.max(left + half, x))
   })
 
-  function syncTipHalf() {
-    const tip = tipRef.current
-    if (!tip) return
-    const next = Math.max(24, tip.offsetWidth / 2)
-    if (Math.abs(next - tipHalfRef.current) < 0.5) return
-    tipHalfRef.current = next
-    // Re-clamp tipX now that the measured width changed.
-    const x = hoverX.get()
-    hoverX.jump(x)
-    smoothX.jump(x)
+  /** Direct-DOM text writes — no re-render while the cursor moves. */
+  function writeText(ratio: number) {
+    if (timeTextRef.current)
+      timeTextRef.current.textContent = formatLapTime(
+        distanceRatioToTime(ratio) * LAP_DURATION_MS,
+      )
+    if (pctTextRef.current)
+      pctTextRef.current.textContent = `${Math.round(ratio * 100)}%`
   }
 
-  function measureLayout() {
+  function writeTextFromX(x: number) {
+    const width = Math.max(1, barWidthRef.current)
+    writeText(
+      Math.min(1, Math.max(0, (x - barLeftRef.current) / width)),
+    )
+  }
+
+  function updateHover(clientX: number, clientY?: number) {
+    hoverSuppress.current = false
     const scrubber = scrubberRef.current
-    const bar = timelineRef.current
+    const bar = barRef.current
     if (!scrubber || !bar) return
-    const scrubberRect = scrubber.getBoundingClientRect()
-    const barRect = bar.getBoundingClientRect()
-    scrubberLeftRef.current = scrubberRect.left
-    scrubberRightRef.current = scrubberRect.right
-    timelineLeftRef.current = barRect.left
-    timelineWidthRef.current = barRect.width
-    timelineTopRef.current = barRect.top
-    timelineBottomRef.current = barRect.bottom
-    setTrackWidth(Math.max(1, scrubberRect.width))
-    setDotTop(barRect.top + barRect.height / 2 - scrubberRect.top)
-  }
+    const s = scrubber.getBoundingClientRect()
+    const b = bar.getBoundingClientRect()
+    const x = Math.min(s.right, Math.max(s.left, clientX))
+    const bx = Math.min(b.right, Math.max(b.left, clientX))
+    const ratio = Math.min(1, Math.max(0, (bx - b.left) / Math.max(1, b.width)))
 
-  function ratioFromClientX(clientX: number) {
-    const scrubber = scrubberRef.current
-    if (!scrubber) return null
-    const rect = scrubber.getBoundingClientRect()
-    const width = Math.max(1, rect.width)
-    return Math.min(1, Math.max(0, (clientX - rect.left) / width))
-  }
-
-  function writeProgress(x: number) {
-    const left = scrubberLeftRef.current
-    const width = Math.max(1, scrubberRightRef.current - left)
-    const ratio = Math.min(1, Math.max(0, (x - left) / width))
-    const pct = ratio * 100
-    if (timeTextRef.current) {
-      timeTextRef.current.textContent = formatLapTime(ratio * LAP_DURATION_MS)
+    scrubberLeftRef.current = s.left
+    scrubberWidthRef.current = s.width
+    barLeftRef.current = b.left
+    barWidthRef.current = b.width
+    if (lastX.current == null) {
+      hoverX.jump(x)
+      smoothX.jump(x)
+    } else if (x !== lastX.current) {
+      tipDir.current = x > lastX.current ? 1 : -1
     }
-    if (pctTextRef.current) {
-      pctTextRef.current.textContent = `${Math.round(pct)}%`
+    lastX.current = x
+    lastRatio.current = ratio
+    hoveringRef.current = true
+    hoverX.set(x)
+    writeText(ratio)
+    const overBar = clientY != null && clientY >= b.top && clientY <= b.bottom
+    const overChart = clientY != null && clientY > b.bottom
+    overChartRef.current = overChart
+    chartRef?.current?.setHoverRatio(ratio, overChart)
+    setPreviewRatio(ratio)
+
+    if (!overBar) {
+      setHoverTip((prev) =>
+        prev && !prev.overBar ? prev : { overBar: false, dir: tipDir.current },
+      )
+      return
     }
-  }
-
-  function writeCurveDots(ratio: number) {
-    chartRef?.current?.setHoverRatio(ratio)
-  }
-
-  function syncGeometry(clientX: number) {
-    const scrubber = scrubberRef.current
-    const bar = timelineRef.current
-    if (!scrubber || !bar) return null
-    const scrubberRect = scrubber.getBoundingClientRect()
-    const barRect = bar.getBoundingClientRect()
-    const x = Math.min(scrubberRect.right, Math.max(scrubberRect.left, clientX))
-    scrubberLeftRef.current = scrubberRect.left
-    scrubberRightRef.current = scrubberRect.right
-    timelineLeftRef.current = barRect.left
-    timelineWidthRef.current = barRect.width
-    timelineTopRef.current = barRect.top
-    timelineBottomRef.current = barRect.bottom
-    return { x, barRect }
-  }
-
-  function clearHoverUi() {
-    lastHoverX.current = null
-    hoveringRef.current = false
-    chartRef?.current?.setHoverRatio(null)
-    setHoverTip(null)
+    const sector = sectorAtRatio(ratio)
+    const accent = sectorAccent(sector.delta)
+    setHoverTip((prev) =>
+      prev?.overBar && prev.name === sector.name
+        ? prev
+        : {
+            overBar: true,
+            name: sector.name,
+            delta: sector.delta,
+            accent,
+            dir: tipDir.current,
+          },
+    )
   }
 
   function clearHover() {
     if (focusLocked) return
-    clearHoverUi()
-    suppressUntilMoveRef.current = false
+    hoveringRef.current = false
+    overChartRef.current = false
+    lastX.current = null
+    hoverSuppress.current = false
+    chartRef?.current?.setHoverRatio(null)
     setPreviewRatio(null)
-  }
-
-  function updateHover(clientX: number, clientY?: number) {
-    if (suppressUntilMoveRef.current) {
-      suppressUntilMoveRef.current = false
-    }
-
-    const geometry = syncGeometry(clientX)
-    if (!geometry) return
-    const { x, barRect } = geometry
-    const ratio = ratioFromClientX(clientX)
-    if (ratio == null) return
-
-    if (lastHoverX.current == null) {
-      hoverX.jump(x)
-      smoothX.jump(x)
-    } else if (x !== lastHoverX.current) {
-      tipDir.current = x > lastHoverX.current ? 1 : -1
-    }
-    lastHoverX.current = x
-    hoveringRef.current = true
-    hoverX.set(x)
-    writeProgress(x)
-    writeCurveDots(ratio)
-    setPreviewRatio(ratio)
-
-    const overBar =
-      clientY != null &&
-      clientY >= barRect.top &&
-      clientY <= barRect.bottom
-
-    const sector = sectorAtRatio(
-      (x - barRect.left) / Math.max(1, barRect.width),
-    )
-    const next: HoverTip = {
-      overBar,
-      name: sector.name,
-      delta: sector.delta,
-      accent: sectorAccent(sector.delta),
-      dir: tipDir.current,
-    }
-    setHoverTip((prev) => {
-      if (
-        prev &&
-        prev.overBar === next.overBar &&
-        prev.name === next.name &&
-        prev.delta === next.delta &&
-        prev.accent === next.accent
-      ) {
-        return prev
-      }
-      return next
-    })
+    setHoverTip(null)
   }
 
   function seekFromClientX(clientX: number, clientY?: number) {
-    const ratio = ratioFromClientX(clientX)
-    if (ratio == null) return
-    suppressUntilMoveRef.current = false
-    seekRatio(ratio)
+    const bar = barRef.current
+    if (!bar) return
+    const rect = bar.getBoundingClientRect()
+    seekRatio(
+      Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(1, rect.width))),
+    )
     updateHover(clientX, clientY)
   }
 
-  useEffect(() => {
-    if (previewGeneration === 0) return
-    suppressUntilMoveRef.current = true
-    clearHoverUi()
-  }, [previewGeneration])
+  const tipKey = hoverTip ? (hoverTip.overBar ? hoverTip.name : 'progress') : null
 
+  // Mode switches swap the series under a stuck cursor. Refresh the dots
+  // and tip from the last ratio so the numbers match the chart on screen.
   useLayoutEffect(() => {
-    measureLayout()
-    const scrubber = scrubberRef.current
-    if (!scrubber) return
-    const observer = new ResizeObserver(() => measureLayout())
-    observer.observe(scrubber)
-    window.addEventListener('resize', measureLayout)
-    return () => {
-      observer.disconnect()
-      window.removeEventListener('resize', measureLayout)
-    }
-  }, [])
+    const chart = chartRef?.current
+    if (!chart) return
+    chart.setHoverRatio(
+      hoveringRef.current ? lastRatio.current : null,
+      hoveringRef.current && overChartRef.current,
+    )
+  }, [children, chartRef])
 
-  useEffect(() => {
+  // Time/% text follows the tip while it glides — direct DOM writes only.
+  useLayoutEffect(() => {
     const unsubscribe = smoothX.on('change', (x) => {
       if (!hoveringRef.current) return
-      writeProgress(x)
+      writeTextFromX(x)
     })
     return unsubscribe
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [smoothX])
 
-  const playheadLeft = displayProgress * trackWidth
-  const tipKey = hoverTip
-    ? hoverTip.overBar
-      ? `sector-${hoverTip.name}`
-      : 'progress'
-    : null
-
+  // Re-measure + refill after the tip mounts or its content changes width.
   useLayoutEffect(() => {
     if (!hoverTip) return
     const tip = tipRef.current
+    const bar = barRef.current
     if (tip) {
-      tip.style.top = `${timelineTopRef.current - 4}px`
-      syncTipHalf()
+      tipHalf.current = Math.max(20, tip.offsetWidth / 2)
+      if (bar) tip.style.top = `${bar.getBoundingClientRect().top - 3}px`
     }
-    writeProgress(hoverX.get())
-
+    writeText(lastRatio.current)
     if (!tip || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(() => {
-      tip.style.top = `${timelineTopRef.current - 4}px`
-      syncTipHalf()
+      tipHalf.current = Math.max(20, tip.offsetWidth / 2)
     })
     observer.observe(tip)
     return () => observer.disconnect()
-  }, [hoverTip, tipKey, hoverX, smoothX])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tipKey])
 
   return (
     <div
       ref={scrubberRef}
-      className="relative flex flex-col gap-1"
+      className="relative flex flex-col gap-1 px-[2px]"
       onMouseMove={(e) => {
-        if (suppressUntilMoveRef.current && e.movementX === 0 && e.movementY === 0) {
+        if (hoverSuppress.current && e.movementX === 0 && e.movementY === 0) {
           return
         }
         updateHover(e.clientX, e.clientY)
@@ -338,140 +368,93 @@ export function TimelineScrubber({
         seekFromClientX(e.clientX, e.clientY)
       }}
     >
-      <div
-        ref={timelineRef}
-        className="relative flex h-3 w-full items-center overflow-hidden"
-        role="slider"
-        aria-valuenow={Math.round(displayProgress * 100)}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-label="Timeline"
-      >
-        <div className="flex h-2.5 w-full gap-px overflow-hidden rounded-[2px]">
-          {SECTORS.map((sector) => {
-            const accent = sectorAccent(sector.delta)
-            const active = hoverTip?.overBar && hoverTip.name === sector.name
-            return (
-              <button
-                key={sector.name}
-                type="button"
-                className="relative h-full cursor-pointer rounded-none transition-colors duration-100 focus-visible:outline-none"
-                style={{
-                  flex: sector.flex,
-                  backgroundColor: active
-                    ? accent
-                    : 'color-mix(in srgb, var(--ink) 48%, transparent)',
-                }}
-                aria-label={`${sector.name}, ${formatDelta(sector.delta)}`}
-                onFocus={(e) => {
-                  const rect = e.currentTarget.getBoundingClientRect()
-                  updateHover(
-                    rect.left + rect.width / 2,
-                    rect.top + rect.height / 2,
-                  )
-                }}
-                onBlur={clearHover}
-              />
-            )
-          })}
-        </div>
-        <div
-          className="pointer-events-none absolute inset-y-0 right-0 bg-card/70"
-          style={{ width: `${(1 - displayProgress) * 100}%` }}
-        />
-      </div>
+      <TimelineBar
+        barRef={barRef}
+        activeName={hoverTip?.overBar ? hoverTip.name : null}
+        onHover={updateHover}
+        onLeave={clearHover}
+      />
 
       {children ? (
-        <div className="relative cursor-crosshair overflow-hidden">
+        <div className="relative cursor-crosshair overflow-hidden rounded-[4px]">
           {children}
+          <ChartSlotLines />
         </div>
       ) : null}
 
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-y-0 z-10 w-[2px] bg-white"
-        style={{ left: playheadLeft, transform: 'translateX(-50%)' }}
-      />
-      <div
-        aria-hidden
-        className="pointer-events-none absolute z-[11] size-2 -translate-x-1/2 -translate-y-1/2 rounded-[2px] bg-white shadow-[0_0_0_2px_var(--card)]"
-        style={{ left: playheadLeft, top: dotTop }}
-      />
+      {chartRef ? <ChartPlaySync chartRef={chartRef} chartKey={children} /> : null}
 
-      {overlayReady
+      {mounted && hoverTip
         ? createPortal(
             <AnimatePresence>
-              {hoverTip ? (
-                <motion.div
-                  key="hover-tip"
-                  ref={tipRef}
-                  initial={
-                    reduceMotion
-                      ? { opacity: 0 }
-                      : { opacity: 0, scale: 0.99, y: 1 }
-                  }
-                  animate={
-                    reduceMotion
-                      ? { opacity: 1 }
-                      : { opacity: 1, scale: 1, y: 0 }
-                  }
-                  exit={
-                    reduceMotion
-                      ? { opacity: 0 }
-                      : { opacity: 0, scale: 0.99, y: 1 }
-                  }
-                  transition={{ duration: 0.12, ease: 'easeOut' }}
-                  className="pointer-events-none fixed z-[9999] -translate-y-full overflow-hidden rounded-[4px] border border-border bg-secondary px-3 py-1 text-xs font-medium text-foreground shadow-[var(--shadow-floating)]"
-                  style={{ left: tipX, x: '-50%' }}
+              <motion.div
+                key="hover-tip"
+                ref={tipRef}
+                initial={
+                  reduceMotion
+                    ? { opacity: 0 }
+                    : { opacity: 0, scale: 0.99, y: 1 }
+                }
+                animate={
+                  reduceMotion ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }
+                }
+                exit={
+                  reduceMotion
+                    ? { opacity: 0 }
+                    : { opacity: 0, scale: 0.99, y: 1 }
+                }
+                transition={TIP_APPEAR_TRANSITION}
+                className="pointer-events-none fixed z-[9999] flex h-7 -translate-y-full items-center overflow-hidden rounded-[4px] bg-secondary px-2.5 text-sm font-medium text-foreground shadow-[var(--shadow-floating)]"
+                style={{ left: tipX, x: '-50%' }}
+              >
+                <AnimatePresence
+                  mode="popLayout"
+                  custom={hoverTip.dir}
+                  initial={false}
                 >
-                  <AnimatePresence
-                    mode="popLayout"
+                  <motion.div
+                    key={tipKey}
                     custom={hoverTip.dir}
-                    initial={false}
+                    variants={
+                      reduceMotion ? reducedTipTextVariants : tipTextVariants
+                    }
+                    initial="enter"
+                    animate="center"
+                    exit="exit"
+                    transition={
+                      reduceMotion
+                        ? REDUCED_TIP_TEXT_TRANSITION
+                        : TIP_TEXT_TRANSITION
+                    }
+                    className="flex items-center gap-2 whitespace-nowrap"
                   >
-                    <motion.div
-                      key={tipKey}
-                      custom={hoverTip.dir}
-                      variants={
-                        reduceMotion ? reducedTipTextVariants : tipTextVariants
-                      }
-                      initial="enter"
-                      animate="center"
-                      exit="exit"
-                      transition={{
-                        duration: reduceMotion ? 0 : 0.16,
-                        ease: 'easeOut',
-                      }}
-                      className="flex items-center gap-2 whitespace-nowrap"
-                    >
-                      {hoverTip.overBar ? (
-                        <>
-                          <span className="tracking-wide text-foreground">
-                            {hoverTip.name}
-                          </span>
-                          <span
-                            className="font-medium tracking-tight tabular-nums"
-                            style={{ color: hoverTip.accent }}
-                          >
-                            {formatDelta(hoverTip.delta)}
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <span
-                            ref={timeTextRef}
-                            className="tracking-wide text-foreground tabular-nums"
-                          />
-                          <span
-                            ref={pctTextRef}
-                            className="font-medium tracking-tight text-foreground/70 tabular-nums"
-                          />
-                        </>
-                      )}
-                    </motion.div>
-                  </AnimatePresence>
-                </motion.div>
-              ) : null}
+                    {hoverTip.overBar ? (
+                      <>
+                        <span className="text-foreground/80">
+                          {hoverTip.name}
+                        </span>
+                        <span
+                          className="font-medium tracking-tight tabular-nums"
+                          style={{ color: hoverTip.accent }}
+                        >
+                          {formatDelta(hoverTip.delta)}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span
+                          ref={timeTextRef}
+                          className="text-foreground/80 tabular-nums"
+                        />
+                        <span
+                          ref={pctTextRef}
+                          className="font-medium tracking-tight text-muted-foreground tabular-nums"
+                        />
+                      </>
+                    )}
+                  </motion.div>
+                </AnimatePresence>
+              </motion.div>
             </AnimatePresence>,
             document.body,
           )

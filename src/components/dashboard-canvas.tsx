@@ -1,5 +1,6 @@
 'use client'
 
+import '@/lib/quiet-three-clock-warning'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import {
   Children,
@@ -64,6 +65,7 @@ import {
   type SectionZone,
 } from '@/track/section-maps'
 import {
+  checkeredSegmentPositions,
   edgeAt,
   offsetPolyline,
   ribbonArcPositions,
@@ -77,6 +79,8 @@ import {
 import { resampleTrack } from '@/track/smooth'
 /** Asphalt fill — a touch darker so heat / edges read clearer. */
 const ROAD = '#45454e'
+/** Asphalt in light mode — a notch lighter so the ribbon isn't a harsh slab on the light page. */
+const ROAD_LIGHT = '#5b5b64'
 /**
  * Section tint strength over asphalt. Sections keep the dark ribbon
  * underneath and tint it instead of replacing it with a flat opaque sticker
@@ -86,7 +90,10 @@ const ROAD = '#45454e'
 const SECTION_TINT = 0.8
 /** Edge stroke — same on normal / sections / heatmap. */
 const STROKE = '#787886'
-const START_OPACITY = 0.7
+/** Edge stroke in light mode — darker than the asphalt so edges read on the light ribbon. */
+const STROKE_LIGHT = '#3f3f46'
+/** Start/finish line — checkered 8×2, kept at edge-stroke weight so it stays subtle. */
+const START_OPACITY = 0.9
 /** Overlay crossfade rate — opacity damping, settled in ~250 ms. */
 const BLEND_LAMBDA = 9
 /** Track fade-in rate after a geometry swap. */
@@ -111,7 +118,7 @@ const MAX_SECTIONS = 16
 const DOT = '#313138'
 /** Grid dots in light mode — darker than the page so they read as subtle. */
 const DOT_LIGHT = '#cfceca'
-const DOT_OPACITY = 1
+const DOT_OPACITY = 0.5
 const ORIGIN = '#ff0000'
 
 /**
@@ -132,8 +139,8 @@ const ITEM_DEFAULT_COLOR = '#ffea00'
 /** Dark halo around the car glyph so it reads on bright sections and heat. */
 const CAR_HALO = '#101014'
 /** Racing line weight in screen px — slim on overview, bold when zoomed in. */
-const RACING_LINE_PX_OUT = 2
-const RACING_LINE_PX_IN = 5
+const RACING_LINE_PX_OUT = 1.3
+const RACING_LINE_PX_IN = 3.25
 
 /** Screen px for the racing line: thin far out, much easier to see close in. */
 function racingPx(zoom: number, fit: number) {
@@ -143,18 +150,18 @@ function racingPx(zoom: number, fit: number) {
 }
 /** Racing-line alpha — solid paths match the previous flat opacity. */
 const LINE_SOLID_ALPHA = 0.95
-/** Standalone racing lines toggled to dimmed. */
-const LINE_DIM_ALPHA = 0.3
-/** Trail floor (× solid) — deliberately subtle. */
-const LINE_TRAIL_FLOOR = 0.6
-/** Trail length cap (lap fraction) — grows with progress up to this. */
-const LINE_TRAIL_LEN = 0.15
+/** Driven stretch while dimming is on, and unanchored dimmed lines. */
+const LINE_DIM_ALPHA = 0.22
+/**
+ * Lap fraction of the blend at the car. Full dim starts this far behind the
+ * car and that edge moves with it; ahead of the car stays solid.
+ */
+const LINE_FADE_REACH = 0.035
 
 /**
- * Per-sample line alpha. Progress reveal: everything ahead of the car runs
- * solid; behind it a short trail falls off linearly from the tail, so the
- * dimming starts exactly at the car with no flat disconnected stretch. The
- * trail grows with progress up to a cap, and the floor stays subtle.
+ * Per-sample line alpha while dimming is on. Ahead of the car the line is
+ * solid. Behind it the line is dim, and the darkest edge sits just behind
+ * the car so it follows progress. Dimming off is a flat solid line.
  */
 function lineAlpha(
   faded: boolean,
@@ -165,10 +172,12 @@ function lineAlpha(
   if (!faded) return LINE_SOLID_ALPHA
   if (!anchored) return LINE_DIM_ALPHA
   const p = Math.min(1, Math.max(0, progress))
-  if (t >= p || p <= 0) return LINE_SOLID_ALPHA
-  const w = Math.min(LINE_TRAIL_LEN, p)
-  const a = 1 - (p - t) / w
-  return LINE_SOLID_ALPHA * Math.max(LINE_TRAIL_FLOOR, a)
+  if (p <= 0 || t >= p) return LINE_SOLID_ALPHA
+  const behind = p - t
+  const reach = Math.min(LINE_FADE_REACH, p)
+  const u = Math.min(1, behind / reach)
+  const s = u * u * (3 - 2 * u)
+  return THREE.MathUtils.lerp(LINE_SOLID_ALPHA, LINE_DIM_ALPHA, s)
 }
 /** Minimum-curvature racelines by track — full TUMFTM catalog (see @/track/catalog). */
 /**
@@ -527,6 +536,12 @@ const ROAD_LINEAR = /*#__PURE__*/ (() => {
   return { r: c.r, g: c.g, b: c.b }
 })()
 
+/** Light-mode asphalt in working space — tip swatches blend against this when light. */
+const ROAD_LIGHT_LINEAR = /*#__PURE__*/ (() => {
+  const c = new THREE.Color(ROAD_LIGHT)
+  return { r: c.r, g: c.g, b: c.b }
+})()
+
 /**
  * Tip swatch that matches the canvas pixel: blend in linear (same as GL),
  * then encode to sRGB for CSS. Raw LUT bytes-as-CSS was lying under
@@ -539,11 +554,13 @@ function trackSwatchCss(
   b: number,
   a = 1,
   overAsphalt = true,
+  light = false,
 ): string {
+  const base = light ? ROAD_LIGHT_LINEAR : ROAD_LINEAR
   const aa = overAsphalt ? Math.min(1, Math.max(0, a)) : 1
-  const cr = r * aa + ROAD_LINEAR.r * (1 - aa)
-  const cg = g * aa + ROAD_LINEAR.g * (1 - aa)
-  const cb = b * aa + ROAD_LINEAR.b * (1 - aa)
+  const cr = r * aa + base.r * (1 - aa)
+  const cg = g * aa + base.g * (1 - aa)
+  const cb = b * aa + base.b * (1 - aa)
   return `#${new THREE.Color().setRGB(cr, cg, cb).getHexString()}`
 }
 
@@ -571,14 +588,16 @@ function hoverPayload(
   heatPaint: HeatPaint | null,
   metricsSource: MetricsSourceId,
   invert: boolean,
+  light = false,
 ): { color: string; label: string } {
+  const asphalt = light ? ROAD_LIGHT : ROAD
   if (layer === 'sections') {
     const z = zoneAt(zones, t)
-    if (!z) return { color: ROAD, label: 'Section' }
+    if (!z) return { color: asphalt, label: 'Section' }
     // Tip swatch must match the rendered pixel: tint blended over asphalt.
     const c = new THREE.Color(z.color)
     return {
-      color: trackSwatchCss(c.r, c.g, c.b, SECTION_TINT, true),
+      color: trackSwatchCss(c.r, c.g, c.b, SECTION_TINT, true, light),
       label: z.name,
     }
   }
@@ -586,7 +605,7 @@ function hoverPayload(
     const series = seriesFor(lapMetrics(source, metricsSource), metric)
     const { min, max } = metricDisplayRange(metric, series)
     const n = smooth.samples.length
-    if (n < 2) return { color: ROAD, label: 'Track' }
+    if (n < 2) return { color: asphalt, label: 'Track' }
     const u = ((t % 1) + 1) % 1
     const f = u * n
     const i0 = Math.floor(f) % n
@@ -623,7 +642,7 @@ function hoverPayload(
     const v0 = sampleSeries(series, (i0 + 0.5) / n)
     const v1 = sampleSeries(series, (i1 + 0.5) / n)
     const v = v0 + (v1 - v0) * s
-    const color = trackSwatchCss(r, g, b, a, overAsphalt)
+    const color = trackSwatchCss(r, g, b, a, overAsphalt, light)
     if (metric === 'pedals') {
       const side = v < -0.05 ? 'Brake' : v > 0.05 ? 'Throttle' : 'Coast'
       return { color, label: `${side} ${formatMetricValue(metric, v)}` }
@@ -631,7 +650,7 @@ function hoverPayload(
     const unit = metricUnit(metric)
     return { color, label: `${formatMetricValue(metric, v)} ${unit}` }
   }
-  return { color: ROAD, label: 'Track' }
+  return { color: asphalt, label: 'Track' }
 }
 
 /**
@@ -713,7 +732,9 @@ const HoverMark = memo(function HoverMark({
 })
 
 function carTexture(fill: string) {
-  const size = 128
+  // 256px glyph — at the 24px overview floor the old 128px source minified
+  // through the mipmap chain and the marker read as a soft blob.
+  const size = 256
   const canvas = document.createElement('canvas')
   canvas.width = size
   canvas.height = size
@@ -726,17 +747,19 @@ function carTexture(fill: string) {
   ctx.lineJoin = 'round'
   // Dark halo first — at overview sizes the old 2px color stroke shrank to
   // sub-pixel and the grey body melted into asphalt / coast sections.
+  // Kept tight (was 3) so the rim reads as an outline, not a glow.
   ctx.strokeStyle = CAR_HALO
-  ctx.lineWidth = 3
+  ctx.lineWidth = 2.5
   ctx.stroke(path)
   ctx.fillStyle = fill
   ctx.fill(path)
   // Crisp inner edge on the bright fill.
-  ctx.strokeStyle = 'rgba(0,0,0,0.55)'
-  ctx.lineWidth = 1.5
+  ctx.strokeStyle = 'rgba(0,0,0,0.6)'
+  ctx.lineWidth = 1
   ctx.stroke(path)
   const tex = new THREE.CanvasTexture(canvas)
   tex.colorSpace = THREE.SRGBColorSpace
+  tex.anisotropy = 8
   tex.needsUpdate = true
   return tex
 }
@@ -807,10 +830,9 @@ const ItemCar = memo(function ItemCar({
   )
 })
 
-/** Racing line — screen-weight ribbon, above the asphalt. Car lines dissolve
- * over the driven stretch (bright at the car, dim toward the start) and run
- * solid ahead; standalone lines are always solid. Same vertex order as
- * strokeHeatmap. */
+/** Racing line — screen-weight ribbon, above the asphalt. With dimming on,
+ * the line is solid ahead of the car and dim behind it, darkest just behind
+ * the car. Standalone lines stay solid. Same vertex order as strokeHeatmap. */
 const RacingLine = memo(function RacingLine({
   path,
   color,
@@ -945,6 +967,7 @@ const TrackHoverProbe = memo(function TrackHoverProbe({
   heatPaintRef,
   metricsSource,
   invert,
+  light,
   onHover,
 }: {
   enabled: boolean
@@ -958,6 +981,7 @@ const TrackHoverProbe = memo(function TrackHoverProbe({
   heatPaintRef: RefObject<HeatPaint | null>
   metricsSource: MetricsSourceId
   invert: boolean
+  light: boolean
   onHover: (info: TrackHoverInfo | null) => void
 }) {
   const gl = useThree((s) => s.gl)
@@ -1016,6 +1040,7 @@ const TrackHoverProbe = memo(function TrackHoverProbe({
         heatPaintRef.current,
         metricsSource,
         invert,
+        light,
       )
       onHover({
         t: hit.t,
@@ -1055,6 +1080,7 @@ const TrackHoverProbe = memo(function TrackHoverProbe({
     heatPaintRef,
     metricsSource,
     invert,
+    light,
     onHover,
   ])
 
@@ -1174,6 +1200,7 @@ const Road = memo(function Road({
   heatPaintRef,
   metricsSource,
   invert,
+  light,
 }: {
   track: Track
   view: RefObject<View>
@@ -1186,6 +1213,7 @@ const Road = memo(function Road({
   heatPaintRef: RefObject<HeatPaint | null>
   metricsSource: MetricsSourceId
   invert: boolean
+  light: boolean
 }) {
   const fill = useMemo(() => new THREE.BufferGeometry(), [])
   const heat = useMemo(() => new THREE.BufferGeometry(), [])
@@ -1652,9 +1680,14 @@ const Road = memo(function Road({
     const a0 = side.left[0]
     const b0 = side.right[0]
     if (a0 && b0) {
+      const checker = checkeredSegmentPositions(a0, b0, half, 0.08)
       startLine.setAttribute(
         'position',
-        new THREE.BufferAttribute(segmentPositions(a0, b0, half, 0.08), 3),
+        new THREE.BufferAttribute(checker.positions, 3),
+      )
+      startLine.setAttribute(
+        'color',
+        new THREE.BufferAttribute(checker.colors, 3),
       )
       startLine.computeBoundingSphere()
     }
@@ -1681,13 +1714,15 @@ const Road = memo(function Road({
   })
 
   const sectionCount = Math.min(displayedZones.length, MAX_SECTIONS)
+  const asphalt = light ? ROAD_LIGHT : ROAD
+  const stroke = light ? STROKE_LIGHT : STROKE
 
   return (
     <group ref={groupRef}>
       <mesh ref={asphaltMesh} geometry={fill} frustumCulled={false} renderOrder={9}>
         <meshBasicMaterial
           ref={asphaltMat}
-          color={ROAD}
+          color={asphalt}
           side={THREE.DoubleSide}
           toneMapped={false}
           transparent
@@ -1748,7 +1783,7 @@ const Road = memo(function Road({
       >
         <meshBasicMaterial
           ref={strokeLMat}
-          {...(strokeMode === 'c' ? { vertexColors: true } : { color: STROKE })}
+          {...(strokeMode === 'c' ? { vertexColors: true } : { color: stroke })}
           side={THREE.DoubleSide}
           toneMapped={false}
           transparent
@@ -1766,7 +1801,7 @@ const Road = memo(function Road({
       >
         <meshBasicMaterial
           ref={strokeRMat}
-          {...(strokeMode === 'c' ? { vertexColors: true } : { color: STROKE })}
+          {...(strokeMode === 'c' ? { vertexColors: true } : { color: stroke })}
           side={THREE.DoubleSide}
           toneMapped={false}
           transparent
@@ -1783,7 +1818,7 @@ const Road = memo(function Road({
       >
         <meshBasicMaterial
           ref={startMat}
-          color={STROKE}
+          vertexColors
           side={THREE.DoubleSide}
           toneMapped={false}
           transparent
@@ -1808,7 +1843,7 @@ const Road = memo(function Road({
               ref={(m) => {
                 dividerMats.current[i] = m
               }}
-              color={STROKE}
+              color={stroke}
               side={THREE.DoubleSide}
               toneMapped={false}
               transparent
@@ -3262,8 +3297,9 @@ export function DashboardCanvas() {
     () => true,
     () => false,
   )
-  /** Asphalt stays dark in both themes — only the grid dots flip with the page. */
-  const dot = mounted && resolvedTheme === 'light' ? DOT_LIGHT : DOT
+  /** Asphalt lifts a notch in light mode; only the grid dots flipped before. */
+  const light = mounted && resolvedTheme === 'light'
+  const dot = light ? DOT_LIGHT : DOT
   const view = useRef<View>(newView())
   const source = CATALOG.find((t) => t.id === trackId) ?? CATALOG[0]!
   const orientation = useMemo<TrackOrientation>(
@@ -3679,6 +3715,7 @@ export function DashboardCanvas() {
           heatPaintRef={heatPaintRef}
           metricsSource={metricsSource}
           invert={invert}
+          light={light}
         />
         {car1Visible ? (
           <>
@@ -3744,6 +3781,7 @@ export function DashboardCanvas() {
           heatPaintRef={heatPaintRef}
           metricsSource={metricsSource}
           invert={invert}
+          light={light}
           onHover={onHover}
         />
         {trackHover && hoverInfo ? (
@@ -3778,3 +3816,46 @@ const SizeProbe = memo(function SizeProbe({
   }, [size, sizeRef, onSize])
   return null
 })
+
+/**
+ * Building-block exports — the dashboard canvas as composable pieces.
+ * Import these from `@/components/dashboard` to place any block anywhere.
+ */
+export {
+  CATALOG,
+  FOCUS_OPTIONS,
+  ITEM_COLORS,
+  LAYERS,
+  ROTATE_OPTIONS,
+  Camera,
+  DebugPanel,
+  Grid,
+  HeatmapLegend,
+  HoverMark,
+  ItemCar,
+  ItemsPanel,
+  RacingLine,
+  Road,
+  SectionLegend,
+  SizeProbe,
+  StateProbe,
+  TrackHoverProbe,
+  TrackHoverTip,
+  fitTrack,
+  newView,
+  orientRacePoints,
+  orientTrack,
+  orientationFor,
+  place,
+  poseOnPath,
+}
+export type {
+  FocusTarget,
+  HeatPaint,
+  LayerId,
+  MouseDebug,
+  RotateDeg,
+  TrackHoverInfo,
+  TrackOrientation,
+  View,
+}

@@ -1,18 +1,17 @@
 'use client'
 
-import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useId, useRef, type KeyboardEvent, type ReactNode } from 'react'
 import { motion, useReducedMotion } from 'motion/react'
-
-const LAYOUT = { type: 'spring', stiffness: 550, damping: 40 } as const
 
 export type ToolbarTab = { id: string; label: string }
 
-export type ToolbarFrameProps = {
+export function ToolbarFrame({
+  children,
+  className,
+}: {
   children: ReactNode
   className?: string
-}
-
-export function ToolbarFrame({ children, className }: ToolbarFrameProps) {
+}) {
   return (
     <div
       className={[
@@ -27,83 +26,44 @@ export function ToolbarFrame({ children, className }: ToolbarFrameProps) {
   )
 }
 
-export type ToolbarProps = {
+export function Toolbar({
+  tabs,
+  value,
+  onValueChange,
+  label,
+}: {
   tabs: ToolbarTab[]
   value: string
   onValueChange: (id: string) => void
   label: string
-}
-
-type Pill = {
-  x: number
-  width: number
-}
-
-export function Toolbar({ tabs, value, onValueChange, label }: ToolbarProps) {
-  const [pill, setPill] = useState<Pill | null>(null)
+}) {
   const reduceMotion = useReducedMotion()
-  const trackRef = useRef<HTMLDivElement>(null)
+  const pillId = useId()
   const tabRefs = useRef(new Map<string, HTMLButtonElement>())
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const index = tabs.findIndex((tab) => tab.id === value)
     if (index < 0) return
-
-    let next = index
+    let next = -1
     if (event.key === 'ArrowRight') next = (index + 1) % tabs.length
-    else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length
+    else if (event.key === 'ArrowLeft')
+      next = (index - 1 + tabs.length) % tabs.length
     else if (event.key === 'Home') next = 0
     else if (event.key === 'End') next = tabs.length - 1
     else return
-
     event.preventDefault()
-    const nextTab = tabs[next]
-    if (!nextTab) return
+    const nextTab = tabs[next]!
     onValueChange(nextTab.id)
     tabRefs.current.get(nextTab.id)?.focus()
   }
 
-  useLayoutEffect(() => {
-    const track = trackRef.current
-    if (!track) return
-
-    const measure = () => {
-      const button = tabRefs.current.get(value)
-      if (!button) return
-      const trackRect = track.getBoundingClientRect()
-      const buttonRect = button.getBoundingClientRect()
-      setPill({
-        x: buttonRect.left - trackRect.left,
-        width: buttonRect.width,
-      })
-    }
-
-    measure()
-    const observer = new ResizeObserver(measure)
-    observer.observe(track)
-    const button = tabRefs.current.get(value)
-    if (button) observer.observe(button)
-    return () => observer.disconnect()
-  }, [value])
-
   return (
     <div
-      ref={trackRef}
       role="tablist"
       aria-label={label}
       onKeyDown={onKeyDown}
       className="relative flex min-w-0 flex-nowrap items-center gap-0.5 overflow-x-auto"
     >
-      {pill ? (
-        <motion.span
-          aria-hidden
-          className="pointer-events-none absolute inset-y-0 rounded-[4px] bg-secondary"
-          initial={false}
-          animate={{ x: pill.x, width: pill.width }}
-          transition={reduceMotion ? { duration: 0 } : LAYOUT}
-          style={{ left: 0 }}
-        />
-      ) : null}
       {tabs.map((tab) => {
         const isActive = tab.id === value
         return (
@@ -119,13 +79,25 @@ export function Toolbar({ tabs, value, onValueChange, label }: ToolbarProps) {
             }}
             onClick={() => onValueChange(tab.id)}
             className={[
-              'group relative z-10 inline-flex h-7 shrink-0 cursor-pointer items-center justify-center rounded-[4px] px-2.5 text-sm font-medium transition-colors duration-100',
+              'group relative inline-flex h-7 shrink-0 cursor-pointer items-center justify-center rounded-[4px] px-2.5 text-sm font-medium transition-colors duration-100',
               isActive
                 ? 'text-foreground/80'
                 : 'text-muted-foreground hover:text-foreground/80',
             ].join(' ')}
           >
-            <span className="inline-block whitespace-nowrap transition-transform duration-100 ease-out group-active:scale-[0.96] motion-reduce:transition-none motion-reduce:group-active:scale-100">
+            {isActive ? (
+              <motion.span
+                aria-hidden
+                layoutId={pillId}
+                transition={
+                  reduceMotion
+                    ? { duration: 0 }
+                    : { type: 'spring', stiffness: 550, damping: 40 }
+                }
+                className="pointer-events-none absolute inset-0 rounded-[3px] bg-secondary"
+              />
+            ) : null}
+            <span className="relative z-10 inline-block whitespace-nowrap transition-transform duration-100 ease-out group-active:scale-[0.96] motion-reduce:transition-none motion-reduce:group-active:scale-100">
               {tab.label}
             </span>
           </button>

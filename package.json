@@ -17,6 +17,7 @@
     "cn": "^0.4.0",
     "echarts": "^6.1.0",
     "echarts-for-react": "^3.0.6",
+    "loading-dev": "^0.3.5",
     "lucide-react": "^1.56.0",
     "motion": "^14.1.1",
     "next": "16.4.0",

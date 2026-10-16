@@ -1,0 +1,6 @@
+ts	phase	decision	why	evidence	result
+2026-10-16T08:45:00Z	frame	routed to figure-it-out instead of Feature or Refactoring	request is a large ambiguous reshape of a 3630 line file with one export	src/components/dashboard-canvas.tsx (3792 lines after edit)	scoped as medium-high rigor refactor
+2026-10-16T08:47:00Z	design	chose export block plus new dashboard folder over moving code out of the monolith	smallest change that gives importable blocks without risking the R3F transition logic	src/components/dashboard-canvas.tsx export block	kept old canvas untouched as the behavior pin
+2026-10-16T08:52:00Z	build	appended building block exports to dashboard-canvas	one edit exposes scene and panel pieces to new modules	npx tsc --noEmit clean	VERIFIED compile level
+2026-10-16T08:53:00Z	build	created provider scene panels shell and barrel under src/components/dashboard	state shape first, then composition, so app code can place any piece anywhere	npx tsc --noEmit clean, npx eslint clean	VERIFIED compile level
+2026-10-16T08:54:00Z	verify	added /dashboard/blocks preview route for side by side check	need a real surface comparing old canvas against new shell without touching /dashboard	npm run build, routes /dashboard and /dashboard/blocks prerendered	VERIFIED prerender, visual equivalence still open

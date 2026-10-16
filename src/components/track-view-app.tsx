@@ -1,34 +1,44 @@
 'use client'
 
-import { PlaybackProvider, usePlayback } from '@/components/playback-context'
+import dynamic from 'next/dynamic'
+import { MapFocusProvider } from '@/components/map-focus'
+import { PlaybackProvider } from '@/components/playback-context'
 import { TopBar } from '@/components/top-bar'
 import { TelemetryDock } from '@/components/telemetry-dock'
+import { spa, spaRace } from '@/track/spa'
 
-function PlaybackDebug() {
-  const { displayProgress, displayTimeMs, isPlaying, isPreviewing } =
-    usePlayback()
+const TrackCanvas = dynamic(
+  () => import('@/components/track-canvas').then((m) => m.TrackCanvas),
+  { ssr: false, loading: () => <div className="absolute inset-0" /> },
+)
 
-  return (
-    <div className="flex min-h-0 flex-1 flex-col items-center pt-6">
-      <span className="text-4xl font-medium tracking-tight text-foreground/80 tabular-nums">
-        {Math.round(displayProgress * 100)}%
-      </span>
-      <span className="mt-1 text-sm text-muted-foreground tabular-nums">
-        {(displayTimeMs / 1000).toFixed(3)}s ·{' '}
-        {isPreviewing ? 'preview' : isPlaying ? 'playing' : 'paused'}
-      </span>
-    </div>
-  )
-}
+const RACING_LINE_COLOR = '#349cff'
 
-export function TrackViewApp() {
+const LINES = [
+  { id: 'racing-line', points: spaRace, color: RACING_LINE_COLOR },
+] as const
+
+// KEEP: deprecated root view, do not remove on optimization passes. Kept for
+// reference in case the dashboard blocks need it. Unrouted since page.tsx
+// was removed.
+export function DeprecatedTrackViewApp() {
   return (
     <PlaybackProvider>
-      <div className="flex h-screen w-screen flex-col gap-2 bg-background p-1">
-        <TopBar />
-        <PlaybackDebug />
-        <TelemetryDock />
-      </div>
+      <MapFocusProvider>
+        <div className="relative h-screen w-screen overflow-hidden bg-background">
+          <TrackCanvas track={spa} lines={LINES} />
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-10 p-1">
+            <div className="pointer-events-auto" data-tv-chrome>
+              <TopBar />
+            </div>
+          </div>
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 p-1">
+            <div className="pointer-events-auto" data-tv-chrome>
+              <TelemetryDock />
+            </div>
+          </div>
+        </div>
+      </MapFocusProvider>
     </PlaybackProvider>
   )
 }
