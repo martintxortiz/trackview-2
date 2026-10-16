@@ -1,12 +1,9 @@
 /**
- * Heatmap palettes for the dashboard.
- * Matplotlib LUTs stay available; mono + thermal ramps are built in-process
- * so speed / tyre-style metrics stay readable at a glance.
- *
- * Intensity group: peak hue with alpha = value (transparent → solid).
- * Tyre / scientific: opaque RGB ramps.
+ * Heatmap palette sampler.
+ * Scientific LUTs live in `data/palettes.json`; intensity / tyre ramps are
+ * built in-process so speed / tyre metrics stay readable at a glance.
  */
-import tables from '@/track/colormaps.json'
+import tables from '@/track/data/palettes.json'
 
 export type PaletteId =
   | 'amber'
@@ -60,9 +57,36 @@ export const PALETTE_GROUPS: { id: PaletteGroup; name: string }[] = [
 type Rgb = readonly [number, number, number]
 type Lut = readonly Rgb[]
 
-const SCIENTIFIC = tables as unknown as Record<string, Lut>
+function isRgb(v: unknown): v is Rgb {
+  return (
+    Array.isArray(v) &&
+    v.length === 3 &&
+    typeof v[0] === 'number' &&
+    typeof v[1] === 'number' &&
+    typeof v[2] === 'number' &&
+    Number.isFinite(v[0]) &&
+    Number.isFinite(v[1]) &&
+    Number.isFinite(v[2])
+  )
+}
 
-function lerp(a: number, b: number, t: number) {
+function isLut(v: unknown): v is Lut {
+  return Array.isArray(v) && v.length >= 2 && v.every(isRgb)
+}
+
+/** Wide JSON → typed LUT map (invalid keys skipped). */
+function parseScientificTables(raw: unknown): ReadonlyMap<string, Lut> {
+  const map = new Map<string, Lut>()
+  if (raw === null || typeof raw !== 'object') return map
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (isLut(value)) map.set(key, value)
+  }
+  return map
+}
+
+const SCIENTIFIC = parseScientificTables(tables)
+
+function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t
 }
 
@@ -80,7 +104,7 @@ function sampleStops(stops: readonly Rgb[], t: number): Rgb {
 }
 
 /** Smoothstep 0…1 for opacity knees. */
-function smooth01(t: number) {
+function smooth01(t: number): number {
   const u = Math.min(1, Math.max(0, t))
   return u * u * (3 - 2 * u)
 }
@@ -101,7 +125,11 @@ function monoRamp(peak: Rgb, soft = 0.08): Lut {
   const n = 256
   for (let i = 0; i < n; i++) {
     const t = i / (n - 1)
-    out.push(t < 0.82 ? mix(dark, peak, t / 0.82) : mix(peak, hi, (t - 0.82) / 0.18))
+    out.push(
+      t < 0.82
+        ? mix(dark, peak, t / 0.82)
+        : mix(peak, hi, (t - 0.82) / 0.18),
+    )
   }
   return out
 }
@@ -172,7 +200,7 @@ const PROCEDURAL: Partial<Record<PaletteId, Lut>> = {
 }
 
 function lutFor(id: PaletteId): Lut {
-  return PROCEDURAL[id] ?? SCIENTIFIC[id] ?? PROCEDURAL.amber!
+  return PROCEDURAL[id] ?? SCIENTIFIC.get(id) ?? PROCEDURAL.amber!
 }
 
 /** Intensity palettes paint peak hue × value-as-alpha (asphalt shows through). */

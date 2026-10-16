@@ -1,5 +1,5 @@
 /**
- * Build track modules from TUMFTM racetrack-database CSVs (meters, LGPL-3.0).
+ * Build track geometry JSON from TUMFTM racetrack-database CSVs (meters, LGPL-3.0).
  * Source: https://github.com/TUMFTM/racetrack-database
  * Tracks live in scripts/tumftm/tracks/<Name>.csv, racelines in
  * scripts/tumftm/racelines/<Name>.csv. Run: node scripts/build-tracks.mjs
@@ -12,7 +12,10 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const scripts = path.join(root, 'scripts')
 const tumTracks = path.join(scripts, 'tumftm', 'tracks')
 const tumRacelines = path.join(scripts, 'tumftm', 'racelines')
-const outDir = path.join(root, 'src', 'track')
+const outDir = path.join(root, 'src', 'track', 'data', 'geometry')
+
+const SOURCE =
+  'TUMFTM racetrack-database (LGPL-3.0), https://github.com/TUMFTM/racetrack-database'
 
 function stripBom(t) {
   return t.charCodeAt(0) === 0xfeff ? t.slice(1) : t
@@ -36,7 +39,12 @@ function readTrackCsv(absPath) {
     if (!t || t.startsWith('#') || t.startsWith('x_m')) continue
     const [x, y, right, left] = t.split(',').map(Number)
     if (![x, y, left, right].every(Number.isFinite)) continue
-    samples.push([x, y, left, right])
+    samples.push([
+      Number(x.toFixed(2)),
+      Number(y.toFixed(2)),
+      Number(left.toFixed(2)),
+      Number(right.toFixed(2)),
+    ])
   }
   const first = samples[0]
   const last = samples[samples.length - 1]
@@ -58,7 +66,7 @@ function readRacelineCsv(absPath) {
     if (!t || t.startsWith('#') || t.startsWith('x_m')) continue
     const [x, y] = t.split(',').map(Number)
     if (![x, y].every(Number.isFinite)) continue
-    pts.push([x, y])
+    pts.push([Number(x.toFixed(2)), Number(y.toFixed(2))])
   }
   const first = pts[0]
   const last = pts[pts.length - 1]
@@ -72,7 +80,7 @@ function readRacelineCsv(absPath) {
   return pts
 }
 
-function writeFromCsv({ csvFile, raceFile, id, name, varName }) {
+function writeFromCsv({ csvFile, raceFile, id, name }) {
   const trackPath = path.join(tumTracks, csvFile)
   const samples = readTrackCsv(trackPath)
   let race = []
@@ -80,46 +88,21 @@ function writeFromCsv({ csvFile, raceFile, id, name, varName }) {
     const racePath = path.join(tumRacelines, raceFile)
     if (fs.existsSync(racePath)) race = readRacelineCsv(racePath)
   }
-  // Back-compat: also try legacy scripts/<csvFile>
-  const rows = samples
-    .map(
-      ([x, y, l, r]) =>
-        `  [${x.toFixed(2)}, ${y.toFixed(2)}, ${l.toFixed(2)}, ${r.toFixed(2)}],`,
-    )
-    .join('\n')
 
-  const v = varName ?? id
-  const raceVar = `${v}Race`
-  const raceRows = race
-    .map(([x, y]) => `  [${x.toFixed(2)}, ${y.toFixed(2)}],`)
-    .join('\n')
-  const raceBlock =
-    race.length > 0
-      ? `\nexport const ${raceVar}: readonly Xy[] = [\n${raceRows}\n]\n`
-      : ''
+  /** @type {{ id: string, name: string, source: string, samples: number[][], race?: number[][] }} */
+  const body = {
+    id,
+    name,
+    source: SOURCE,
+    samples,
+  }
+  if (race.length > 0) body.race = race
 
-  const body = `// ${name} ground truth for tests. Centerline and widths from the
-// TUMFTM racetrack-database (LGPL-3.0), smoothed from OpenStreetMap.
-// Meters, +x east, +y north, shared origin.
-// https://github.com/TUMFTM/racetrack-database
-
-import type { Track, Xy } from '@/track/frame'
-
-// [x, y, left, right] meters
-const center: readonly (readonly [number, number, number, number])[] = [
-${rows}
-]
-
-export const ${v}: Track = {
-  id: '${id}',
-  name: '${name}',
-  samples: center.map(([x, y, left, right]) => ({ x, y, left, right })),
-}
-${raceBlock}`
-
-  fs.writeFileSync(path.join(outDir, `${id}.ts`), body)
+  fs.mkdirSync(outDir, { recursive: true })
+  const outPath = path.join(outDir, `${id}.json`)
+  fs.writeFileSync(outPath, `${JSON.stringify(body)}\n`)
   console.log(
-    `wrote ${id}.ts  samples=${samples.length} race=${race.length} length≈${loopLength(samples).toFixed(0)} m`,
+    `wrote ${id}.json  samples=${samples.length} race=${race.length} length≈${loopLength(samples).toFixed(0)} m`,
   )
 }
 

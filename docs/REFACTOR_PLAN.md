@@ -1,150 +1,489 @@
 # Refactor plan. Trackview v2
 
+## Progress log
+
+### Batch 1 — U01 Foundation (2026-10-16)
+
+**Status.** Done. Build, `tsc`, pins, and `npm test` green.
+
+**What changed.**
+
+| Area | Change |
+|---|---|
+| Geometry | `build-tracks.mjs` emits `src/track/data/geometry/<id>.json`. Deleted 24 literal `src/track/<circuit>.ts` modules. Thin `spa.ts` re-export kept for legacy `track-view-app.tsx`. |
+| Catalog | Rebuilt as lazy registry: `listTrackIds`, `trackById`, `raceLineFor`. No static import of all geometry. `TRACKS` / `RACE_LINES` are Proxies that load on first access (back-compat for playground). Removed unused `CatalogTrack`. |
+| Domain | Added `src/track/domain.ts` (`TrackFile`, `parseTrack`, `MetricId`, `LapMetrics` type, `SectionZone`, brands, `parseTelemetry`) and `src/lib/result.ts`. |
+| Telemetry | Moved JSON to `src/track/data/telemetry/{spa,monza,texas}.json`. `real-telemetry.ts` exposes `loadTelemetry` → `Result` plus sync `trackTelemetry` for U02. |
+| Fixtures | `colormaps.json` → `data/palettes.json`. Static section zones → `data/section-fixtures.json` (resolver still in `section-maps.ts`). |
+| Tooling | Narrowed app `tsconfig` include to `src/**` (+ Next re-adds `.next/types`). Added `tsconfig.measure.json` (no `.next`) for freeze metrics. Vitest + `npm test`. `scripts/measure-tsc.mjs`. Pin uses spa-only `trackById`. |
+| Tests | `catalog.test.ts`, `real-telemetry.test.ts` (9 tests). |
+
+**Deferred (still U01 scope, not blocking).**
+
+- `dependency-cruiser` / eslint boundaries — freeze fix outranked; add in a follow-up commit if wanted.
+- Zod — only two hand parsers; not earned yet.
+
+**Measurements (`tsconfig.measure.json`, `--incremental false`).**
+
+| Metric | Before (plan §2) | After U01 |
+|---|---|---|
+| Lines of TypeScript | ~58,968 | 10,301 |
+| Types | ~238k | 47,112 |
+| Instantiations | ~154k | 154,178 |
+| Memory | ~560 MB | ~515 MB |
+| Total time | ~10.9s | ~5.45s |
+| Geometry `.ts` literals in program | 25 giant modules | gone (`spa.ts` thin only) |
+| Geometry JSON in program | n/a | **0** (lazy `require` context) |
+| `.next` in measure project | polluted via `**/*` include | none (`tsconfig.measure.json` skips `next-env.d.ts`) |
+
+Pin output matches `scripts/pin-dashboard-contract.baseline.json` unchanged.
+
+**Acceptance checklist.**
+
+- [x] Build / `tsc` / pins / `npm test`
+- [x] No `any` in owned paths
+- [x] No inline geometry in owned logic
+- [x] Lazy catalog invariant (no static all-geometry import)
+- [x] `MetricId` lives in `domain.ts` before U02
+- [x] Editor autocomplete on `store.tsx` — deferred to U05; closed in Batch 5 (`playground/store.ts`, no canvas import)
+
+**Next batch.** U02 (pure analysis) and/or U03 (ribbon/palettes) in parallel on U01 contracts.
+
+### Batch 2 — U02 Pure analysis (2026-10-16)
+
+**Status.** Done (U02 only). Build, `tsc`, pins, and `npm test` green. U03 deferred (disjoint but left for a follow-up session).
+
+**What changed.**
+
+| Area | Change |
+|---|---|
+| Resample | `smooth.ts` — local closed Catmull-Rom (tension 0.5) + arc-length map matching former `THREE.CatmullRomCurve3`. No `three` import. Spa pin digests unchanged. |
+| Lap metrics | Rebuilt with named constants (units in names/TSDoc), shared pedal/battery/tyre helpers, `buildLapMetrics` + cached `lapMetrics` alias. Uses `loadTelemetry`. Re-exports `MetricId` / `LapMetrics` from `domain.ts`. |
+| Sections | New `sections.ts` (`resolveSections` + `resolveSectionMap` alias). Consumes existing `data/section-fixtures.json`. `section-maps.ts` is a thin compat re-export. |
+| Presets | `heatmap-presets.ts` — one-line `MetricId` import redirect to `domain.ts`. |
+| Tests | Characterization pins in `__fixtures__/analysis-pins.json`. `smooth.test.ts`, `lap-metrics.test.ts`, `sections.test.ts` (17 tests total with U01). |
+
+**Commands run.**
+
+- `npm test` — 17 passed
+- `npx tsc --noEmit` — clean
+- `npm run pin` — matches `scripts/pin-dashboard-contract.baseline.json`
+- `npm run build` — green
+
+**Deferred / notes.**
+
+- U03 (ribbon + palette sampler characterization / dead-export cleanup) — next; paths remain free except `heatmap-presets` MetricId redirect already taken by U02.
+- `lap-metrics.ts` still ~490 lines (soft limit ~250). Split into physics submodule later if needed; helpers are already deduped.
+- Monza physics speed digest updated after dropping `three` (float ulp on mid samples). Spa resample/metrics/pin digests unchanged. Auto (FastF1) digests for spa/monza unchanged.
+
+**Acceptance checklist.**
+
+- [x] `npm test` / `tsc` / pin / build
+- [x] No `three` in `lap-metrics` / `sections` / `smooth`
+- [x] No `any` in owned paths
+- [x] Compat aliases `lapMetrics` + `resolveSectionMap`
+- [x] Section fixtures from JSON (not inlined)
+- [ ] U03 — not in this batch
+
+**Next batch.** U03 (ribbon / palettes), then U04 viewer split.
+
+### Batch 3 — U03 Ribbon + palette sampler (2026-10-16)
+
+**Status.** Done. Build, `tsc`, pins, and `npm test` green.
+
+**What changed.**
+
+| Area | Change |
+|---|---|
+| Ribbon | Removed dead `edgeLoops` export. Documented `sidesOf` WeakMap cache (GC-bound to `Track` identity). Formatting / structure cleanup; geometry math unchanged. |
+| Palettes | Sampler stays thin over `data/palettes.json`. Replaced `as unknown as` with `parseScientificTables` + RGB/LUT guards. Deleted leftover `src/track/colormaps.json`. |
+| Presets | Untouched — MetricId redirect already landed in U02. |
+| Tests | `ribbon.test.ts`, `colormaps.test.ts` + `__fixtures__/ribbon-pins.json`, `palette-pins.json` (spa/monza ribbon + key palette samples). |
+
+**Commands run.**
+
+- `npm test` — 22 passed
+- `npx tsc --noEmit` — clean
+- `npm run pin` — matches baseline
+- `npm run build` — green
+
+**Deferred / notes.**
+
+- `ribbon.ts` still ~420 lines (review threshold). Further split only if U04 viewer extract needs it.
+- Procedural mono/tyre LUTs remain in TS (generated); scientific tables stay in JSON.
+
+**Acceptance checklist.**
+
+- [x] Characterization tests spa/monza ribbon
+- [x] Dead export removed (`edgeLoops`)
+- [x] Cache documented / WeakMap-bound
+- [x] Sampler over `palettes.json`, no `any`
+- [x] Pin / `tsc` / build / tests
+
+**Next batch.** U04 viewer scene split.
+
+### Batch 4 — U04 Viewer scene split (2026-10-16)
+
+**Status.** Done. Build, `tsc`, pins, and `npm test` green. Canvas untouched (runtime pin until U09).
+
+**What changed.**
+
+| Area | Change |
+|---|---|
+| Contracts | `src/features/viewer/contracts.ts` — catalogs + `View` / `RoadProps` / hover types matching canvas export surface. |
+| Math | `math.ts` — center/orient/fit/pose/place/paint digests; no scene graph. |
+| Scene | `road.tsx` (buffers + instant layer opacity), `racing-line.tsx`, `item-car.tsx`, `rig.tsx` (Grid/Camera/SizeProbe), `hover-probe.tsx`, `shell.tsx` (`ViewerScene` + tip overlay). |
+| Barrel | `index.ts` re-exports canvas-parity scene + math surface for U05/U06. |
+| Tests | `math.test.ts` pins spa bounds `d00913c7bae8c334`, pose `2b47793ed1e8ac7a`, heat `ab231c5ecbf285c4`, asphaltN `125514`. |
+
+**Commands run.**
+
+- `npm test` — 25 passed
+- `npx tsc --noEmit` — clean
+- `npm run pin` — matches baseline
+- `npm run build` — green
+
+**Deferred / notes.**
+
+- Road omits canvas crossfade / morph animation (instant opacity). Digests cover buffers, not fade timing. Full animation stays on canvas until U09.
+- Soft line budget: `road.tsx` ~370, `hover-probe.tsx` ~450, `rig.tsx` ~360 — measured overflows; no further split this batch (heatmap-road / section-road / camera.tsx deferred).
+- Panels (`DebugPanel`, legends, `StateProbe`) stay on canvas → U05 playground.
+
+**Acceptance checklist.**
+
+- [x] Build / `tsc` / pins / `npm test`
+- [x] Digests for bounds, heatmap sample, car pose
+- [x] No physics inside viewer files
+- [x] No writes to `dashboard-canvas.tsx` / `dashboard/*` / `app/**` / `track/**`
+- [x] Canvas remains runtime pin until U09
+
+**Next batch.** U05 playground state rebuild (depends on U04 contracts).
+
+### Batch 5 — U05 Playground state rebuild (2026-10-16)
+
+**Status.** Done. Build, `tsc`, pins, and `npm test` green. `/dashboard` still on `DashboardCanvas` (U09).
+
+**What changed.**
+
+| Area | Change |
+|---|---|
+| Store | `src/features/playground/store.ts` — pure `State` / `Action` / `reducer`, selectors (`selectTrack`, `selectRacePath`, `selectFollow`, `selectZones`, …), `PlaygroundProvider` with imperative view fit/focus via viewer helpers. No geometry math in the reducer; no `dashboard-canvas` import. |
+| Panels | `panels.tsx` — lean `DebugPanel` / `ItemsPanel` / legends dispatching Actions. Track picker uses `listTrackIds()` (lazy); selected name from `derived.track`. |
+| Shell | `shell.tsx` — Canvas + `ViewerScene` + controls + `ViewerHoverOverlay` + loader. Local `StateProbe` for viewport/mouse. |
+| Barrel | `index.ts` re-exports store / panels / shell. |
+| Tests | `store.test.ts` — 13 reducer/selector cases (track, layer, hover, focus/camera, cars, heatmap preset, sections). |
+
+**Commands run.**
+
+- `npm test` — 38 passed (13 new)
+- `npx tsc --noEmit` — clean
+- `npm run pin` — matches baseline
+- `npm run build` — green
+
+**Autocomplete / freeze probe (vs U01 diagnostics).**
+
+| Probe | Result |
+|---|---|
+| `dashboard-canvas` imports under `src/features/playground/` | **0** (grep) |
+| `tsc --noEmit --incremental false -p tsconfig.measure.json` | ~7.5 s (U01 after: ~5.45 s; new playground/viewer files in program) |
+| IDE/language-service feel on `playground/store.ts` | Cold open / completions stay on viewer + track graph — **no canvas value-import**. Residual canvas still in the measure program via old `src/components/dashboard/*` until U09. |
+| U01 deferred checklist (“Editor autocomplete on `store.tsx`”) | Satisfied for the **new** playground store. Old `dashboard/store.tsx` still imports canvas; ignore it for playground work. |
+
+**Deferred / notes.**
+
+- Soft line budget: `store.ts` ~560, `panels.tsx` ~800 — measured overflows; legends + items UI kept in one panels file for U05 ownership. Split later if needed.
+- Track dropdown lists ids for non-selected circuits (avoids eager `trackById` of all 25 on render). Selected shows full name.
+- Route swap to `PlaygroundShell` is U09.
+- Viewer still has no `StateProbe` export; playground hosts a local copy.
+
+**Acceptance checklist.**
+
+- [x] Owned files only; forbidden paths untouched
+- [x] No import of `@/components/dashboard-canvas` from playground
+- [x] Imports viewer + track contracts only
+- [x] Pure reducer + tests for track / layer / hover / camera
+- [x] No render-phase setState; no geometry math in store
+- [x] Shell composes viewer + panels
+- [x] `/dashboard` still works via old canvas
+- [x] `npm test` / `tsc` / pin / build green
+- [x] Autocomplete/timing note in Progress log
+- [x] Progress log Batch 5 written
+
+**Next batch.** U06 (lap comparison feature). U05-followups optional: trim panels line count; promote `StateProbe` into viewer if U06 wants it.
+
+### Batch 6 — U06 Lap comparison feature (2026-10-16)
+
+**Status.** Done. Build, `tsc`, pins, and `npm test` green. `/dashboard` still on `DashboardCanvas` (U09). Static map first — U07 playback skipped.
+
+**What changed.**
+
+| Area | Change |
+|---|---|
+| Store | `src/features/lap-comparison/store.ts` — thinner `State` / `Action` / `reducer` + selectors; `ComparisonProvider` with chrome zoom/locate on the view ref. Defaults match route (`car1Visible: false`). Car 2 path = `offsetPolyline` lateral offset (`CAR2_LATERAL_M`), not telemetry lap `b`. No geometry math in the reducer; no canvas/playground imports. |
+| Chrome | `chrome.tsx` — back (router), theme toggle, zoom in/out + locate wired to provider; Settings / Log out labeled disabled (`unavailable` + title reason). |
+| Scene | `comparison-scene.tsx` — Canvas + `ViewerScene` + optional racing lines + hover overlay. Comparison defaults: no debug controls, cars off unless toggled. |
+| Shell | `shell.tsx` + `shell-entry.tsx` (`ssr: false` client dynamic). Chrome mounts inside the provider. |
+| Route | `src/app/dashboard/lap-comparison/page.tsx` → feature entry. Deleted route-local `chrome.tsx` / `shell-client.tsx`. |
+| Barrel | `index.ts` re-exports store / chrome / scene / shell. |
+| Tests | `store.test.ts` — 12 cases (defaults, track, layer, hover, car focus, progress clamp, car2 offset ≠ race path, selectors). |
+
+**Commands run.**
+
+- `npm test` — 50 passed (12 new)
+- `npx tsc --noEmit` — clean
+- `npm run pin` — matches baseline
+- `npm run build` — green (`/dashboard` + `/dashboard/lap-comparison`)
+
+**Deferred / notes.**
+
+- **Delta chart** — skipped. First ship is static map only; no A-vs-B telemetry chart. Car 2 remains a lateral raceline offset, not lap `b`.
+- **U07 playback/scrubber** — skipped (static map + chrome is enough for U06 acceptance). Mount later by editing `shell.tsx` if product needs scrubbing.
+- Soft line budget: `store.ts` ~480 — measured overflow OK for provider + chrome callbacks in one file.
+
+**Acceptance checklist.**
+
+- [x] Owned files only; forbidden paths untouched
+- [x] No import of `@/components/dashboard-canvas` or `@/components/dashboard/*` from lap-comparison
+- [x] No import of `@/features/playground`
+- [x] Imports viewer + track contracts only
+- [x] Comparison store + tests for critical transitions
+- [x] Chrome stubs wired or explicitly disabled with reason
+- [x] Scene composes U04 viewer with comparison defaults
+- [x] Route page points at new feature; old route-local chrome/shell-client deleted
+- [x] No Spa globals; car2 ≠ lap `b`
+- [x] `/dashboard` still on old canvas (U09 not this batch)
+- [x] `npm test` / `tsc` / pin / build green
+- [x] Progress log Batch 6 written; Next batch stated
+
+**Next batch.** U08 (legacy isolation). U07 remains optional if scrubbing is required later.
+
+---
+
 ## 1. What the app does, and the direction you recommend
 
-Trackview is a race analysis viewer. It shows circuit geometry in 3D and paints telemetry onto the road. A user picks a track and scrubs a lap. The app answers where time is won or lost.
+Trackview is a race analysis viewer in early build. It shows circuit geometry in an orthographic Three.js map and paints telemetry onto the road ribbon. The user picks a track, inspects layers (normal, sections, heatmap), and places car markers along a lap fraction. The intended product question is where time is won or lost between laps.
 
-Domain concepts are small. A session holds laps. A lap holds samples. A sector is a slice of a lap. A driver owns a lap. Telemetry is speed, throttle, brake, and derived proxies over distance.
+**Domain concepts (code today vs aspirational).**
 
-Data flows in four steps. Source files hold centerlines and racelines. A catalog registers them. Analysis builds speed and section zones from physics or real traces. UI samples those series and draws ribbons in Three.js.
+| Concept | In code today | Evidence |
+|---|---|---|
+| Track | Yes. Closed ring of samples in meters, +x east, +y north | `src/track/frame.ts:8-23` |
+| Raceline | Yes. Separate polyline per track | `src/track/catalog.ts:63-91` |
+| Lap metrics | Yes. Speed, brake, throttle, pedals, battery, tyres as `Float64Array` | `src/track/lap-metrics.ts:36-49` |
+| Sector / section zone | Yes. Lap-fraction bands with color | `src/track/section-maps.ts:11-19` |
+| Telemetry lap pair | Yes for spa, monza, texas. Fields `a` (reference) and `b` (comparison) | `src/track/real-telemetry.ts:22-28` |
+| Driver | Field on JSON only. Not in UI state | `src/track/real-telemetry.ts:16-17` |
+| Session | **Not present.** No type, loader, or route state | Grep of `src/` finds no `Session` type |
 
-Source files today:
+Do not invent a Session model until a second product surface needs it. When it arrives, define it in the foundation contracts first.
 
-- `src/track/spa.ts` through `src/track/zandvoort.ts` hold ground truth centerlines.
-- `src/track/data/spa-telemetry.json`, `monza-telemetry.json`, `texas-telemetry.json` hold real FastF1 traces.
-- `scripts/tumftm/tracks/*.csv` and `scripts/tumftm/racelines/*.csv` are the true sources.
-- `scripts/build-tracks.mjs:75` generates each `src/track/<id>.ts`.
-- `scripts/fetch-f1-telemetry.py` generates the telemetry JSON files.
+**Data flow.**
 
-Features a user sees:
+1. CSV sources under `scripts/tumftm/` feed `scripts/build-tracks.mjs`, which emits per-circuit TypeScript modules under `src/track/<id>.ts` today.
+2. `src/track/catalog.ts:7-31` eagerly imports all 25 circuits into `TRACKS` and `RACE_LINES`.
+3. `src/track/lap-metrics.ts` builds channels from FastF1 JSON (`real-telemetry.ts`) or a curvature-limited physics model.
+4. `src/track/section-maps.ts` builds zones. Some call `lapMetrics` again.
+5. UI samples series and builds Three.js buffers via `src/track/ribbon.ts` and `src/components/dashboard-canvas.tsx`.
 
-- `/dashboard` is the playground. It renders `src/components/dashboard-canvas.tsx` through `src/components/dashboard/shell.tsx`. It exposes road, racing line, heatmap, sections, cars, hover probe, camera presets, debug panels, and item panels.
-- `/dashboard/lap-comparison` is the real app. `src/app/dashboard/lap-comparison/page.tsx:9` renders `LapComparisonShell` with controls off and car one hidden. `chrome.tsx` adds back button, user bar, and bottom left controls. `shell-client.tsx` loads the shell with `ssr:false`.
+**What the user sees.**
 
-Recommended direction. Keep the playground. Isolate the real app. Move data out of logic files. Split the 3697 line canvas into one way layers. Define domain contracts once. Let lap comparison and future analyses code against contracts. Delete nothing with a possible reuse except code with no purpose. Rebuild bloated components from goals without reading the old code.
+- `/dashboard` is the playground. `src/app/dashboard/page.tsx:2` imports `DashboardCanvas` **directly** (not the modular shell). Full debug panels, track picker, cars, heatmap, sections, hover tip.
+- `/dashboard/lap-comparison` is the real app start. `page.tsx:12` mounts `LapComparisonShell` with `controls={false}` and `car1Visible: false`. `chrome.tsx` adds back, avatar menu, and bottom-left zoom/locate controls that are still stubs (`chrome.tsx:156-181`). No A-vs-B chart, no driver picker, no playback on this route yet.
 
-Skills used and missing. I used `how` to trace data flow. I used `why` on git log and comments. I used `architect` to compare target shapes. I used `unslop` to keep this plan plain. I used `typescript-best-practices` as the typing bar. `benchmark-checklist` was not installed. I defined measurements manually in section 7. I ran a single model self review in place of `interrogate` because multi model review was not available in this session. That gap is noted in section 8.
+**Recommended direction.**
+
+Keep the playground as a lab. Make lap-comparison self-contained against shared contracts. Move geometry and fixtures out of TypeScript logic files. Split the canvas monolith into thin viewer pieces. Prefer deletion and lazy load over new frameworks. Keep unused components, but isolate them so they do not tax the language service. Do not block future analyses. New data sources, metrics, and charts plug into contracts without touching the scene.
+
+**Skills used and missing.**
+
+- Used `how` (explorers on playground, lap-comparison, repo map).
+- Used `why` (git log). Thin history. `b9f2b1b` says the canvas monolith was kept on purpose while landing a lint-clean lab and a spa characterization pin.
+- Used `architect` with parallel runners (feature-sliced vs domain-first vs laziness). One runner dropped on model quota. Synthesis is below.
+- Used `typescript-best-practices` as the typing bar.
+- Used `unslop` for this document.
+- `benchmark-checklist` was **not installed**. Measurements in section 7 are defined manually.
+- `interrogate` ran after draft. Findings are folded into this file. Remaining open questions are in section 8.
+
+---
 
 ## 2. Current architecture and the cause of the autocomplete freeze
 
-Current layers are flat and tangled. `src/track/*` holds types, physics, palettes, sections, geometry, telemetry, and JSON imports in one folder. `src/components/dashboard-canvas.tsx` holds scene, geometry building, state derivation, camera math, panels, and legends in one file. `src/components/dashboard/*` wraps that file instead of replacing it. `src/lib/telemetry.ts` holds Spa only playback state. `src/components/*` holds a deprecated viewer next to the new viewer.
+### Architecture today
 
-Dependency diagram today:
+Layers are flat and tangled.
 
-- `src/app/dashboard/page.tsx` imports `src/components/dashboard-canvas.tsx`.
-- `src/app/dashboard/lap-comparison/page.tsx` imports `chrome.tsx` and `shell-client.tsx`.
-- `shell-client.tsx` imports `src/components/dashboard/*`.
-- `src/components/dashboard/store.tsx`, `scene.tsx`, `panels.tsx`, `shell.tsx` all import `src/components/dashboard-canvas.tsx`.
-- `dashboard-canvas.tsx:33` and `store.tsx:15` both import `src/track/catalog.ts`.
-- `catalog.ts:7` imports all 25 track modules.
-- `lap-metrics.ts:7` imports `real-telemetry.ts` and `smooth.ts`.
-- `smooth.ts` imports `three`.
-- `index.ts:39` re exports the whole canvas.
+```text
+app/dashboard/page.tsx ──► dashboard-canvas.tsx ──► catalog.ts ──► 25× track/*.ts
+app/dashboard/lap-comparison/page.tsx
+        ├─ chrome.tsx
+        └─ shell-client.tsx ──► (dynamic) dashboard/shell
+                                      └─ store / scene / panels / types
+                                            └── each imports dashboard-canvas.tsx
+```
 
-Problems marked on that map:
+Facts.
 
-- Circular imports. No hard TypeScript cycle was found. `src/track/*` never imports components. The costly loop is logical. `panels.tsx:3` imports `dashboard-canvas.tsx`. `index.ts:15` re exports both. Every edit re resolves the full subgraph.
-- Duplicated logic. `boxSmooth` in `lap-metrics.ts` overlaps `sampleSeries` and `sampleTrace` and `samplePath` in `frame.ts`. Curvature math overlaps ribbon offset math in `ribbon.ts`. Pedal clamp logic repeats three times. Battery and tyre proxy formulas repeat in `metricsFromReal` and `buildPhysics`. Four `WeakMap` caches repeat the same pattern in `frame.ts:41`, `smooth.ts`, `ribbon.ts`, and `lap-metrics.ts`.
-- Code in the wrong place. Geometry literals live in `.ts` logic files. Physics constants live in `lap-metrics.ts`. Fixture zones live in `section-maps.ts`. Palette tables live in `colormaps.ts` next to sampling code. Spa only playback constants live in `src/lib/telemetry.ts`. Module level `trackTelemetry('spa')` runs at import time. Deprecated `track-view-app.tsx:44` and `track-canvas.tsx:502` ship next to the current viewer.
+- Modular dashboard is a wrapper, not a replacement. `src/components/dashboard/index.ts:39-62` re-exports scene primitives from the monolith. `store.tsx:22-36`, `scene.tsx:10-24`, `panels.tsx:3`, `types.ts:5-13` import the same file.
+- No hard TypeScript import cycle was found. `src/track/*` never imports components. The costly loop is logical. Editing store or scene re-resolves the canvas plus the full catalog.
+- Duplicate viewers. `track-view-app.tsx:21-24` is marked deprecated and unrouted (`src/app/page.tsx` is absent on disk). It still pulls `spa` and the playback/telemetry dock graph.
+- `src/lib/telemetry.ts:21-24` calls `trackTelemetry('spa')` at module load and throws if missing. Fake `SECTORS` there are unrelated to `section-maps.ts`.
+- `smooth.ts:1` imports `three` for Catmull-Rom. Pure analysis depends on the 3D library.
+- Zero `*.test.ts` files. The only pin is `scripts/pin-dashboard-contract.mts` plus `scripts/pin-dashboard-contract.baseline.json`.
 
-Cause of the autocomplete freeze. The freeze comes from literal tuple types held in the main program, not from one slow function.
+### Autocomplete freeze. Cause with evidence
 
-Evidence:
+Symptom. Editor autocomplete freezes about 100 seconds on dashboard work.
 
-- `src/track/spa.ts:9` declares `center` as `readonly (readonly [number, number, number, number])[]` with about 2790 literal tuples. All 25 track files follow the same shape. Total track folder size is 1,471,493 bytes. Largest files are `spa.ts` at 76815 bytes and 2804 lines, `sochi.ts` at 66342 bytes, `suzuka.ts` at 63017 bytes.
-- `src/track/catalog.ts:33` builds `TRACKS` with `as const satisfies readonly Track[]`. Line 61 derives `CatalogTrack` as `(typeof TRACKS)[number]`. This forces the checker to keep literal types for about 50000 tuples on every completion.
-- `src/components/dashboard-canvas.tsx` is 126449 bytes and 3697 lines. It imports `catalog.ts`, `lap-metrics.ts`, `three`, and fiber. Any keystroke in dashboard state rechecks that graph.
-- `src/components/dashboard/index.ts:39` re exports `Camera`, `CATALOG`, `Road`, and 15 more symbols from the canvas. Any import from the barrel loads the canvas plus all tracks.
-- `tsconfig.json:25` includes `**/*.ts` and `**/*.tsx` with only `node_modules` excluded. `.next` is 885215727 bytes and is not excluded. Eight generated `.d.ts` files under `.next/dev/types` join the program. This widens every program load.
+**Primary cause.** Eager TypeScript geometry. `catalog.ts` statically imports 25 modules whose bodies are giant numeric array literals. Measured size of `src/track` is **1,471,493 bytes**. Geometry modules alone are about **1.27 MB / ~50k lines**. Any file that imports `catalog` or `dashboard-canvas` pulls that graph into the language service.
 
-Commands that confirm the cause:
+Supporting evidence.
 
-- `npx tsc --noEmit --extendedDiagnostics` shows program file count, type count, and check time before and after the fix.
-- `npx tsc --noEmit --generateTrace traceDir` plus analysis with `@typescript/analyze-trace` shows which files own check time. Expect `spa.ts`, `catalog.ts`, and `dashboard-canvas.tsx` at the top.
-- `npx tsc --noEmit --listFiles | Select-String ".next"` proves `.next` files join the program today and disappear after the include fix.
-- A before and after autocomplete probe in the editor on `src/components/dashboard/store.tsx` measures the reported 100 second freeze against the fixed state.
+| Evidence | Value | Source |
+|---|---|---|
+| Track folder size | 1,471,493 bytes | `Get-ChildItem src\track -Recurse` |
+| Largest geometry | `spa.ts` 76,815 bytes, 2,804 lines | file size listing |
+| Eager imports | `catalog.ts:7-31` | file read |
+| Program file count | 1,292 files via `tsc --listFilesOnly` | includes `.next` types + node_modules `.d.ts` |
+| `tsc --extendedDiagnostics` (incremental on) | Misleading. Types ~90. Total ~3.8s. No real check time | measured this session |
+| `tsc --extendedDiagnostics --incremental false` | Files 1,292. TS lines ~58,968. Types ~238k. Instantiations ~154k. Memory ~560 MB. Total ~10.9s | freeze investigation |
+| Trace `createSourceFile` | Track geometry modules ~221 ms combined. `dashboard-canvas.tsx` ~24 ms. `tabler-icons-react.d.ts` ~261 ms. `lucide-react.d.ts` ~93 ms | `tsc --generateTrace` this session |
+| Check hot spot | `dashboard-canvas.tsx` ~926 ms. `select.tsx` ~346 ms. sample track module ~111 ms | `@typescript/analyze-trace` |
+| `CatalogTrack` | Defined `catalog.ts:61`, **never referenced** elsewhere | grep |
+| Circular imports | None | `madge --circular` on `src` |
 
-Fix order. Move geometry literals out of `.ts` into JSON. Narrow `tsconfig` include to `src`. Drop `as const` literal retention in the catalog. Break the barrel import of the canvas. Each step is owned by unit U01.
+**Secondary cause.** Monolith size. `dashboard-canvas.tsx` is 126,449 bytes and ~3,862 lines. Dashboard modules import it for types and primitives, so completions revisit a huge check graph.
+
+**Tertiary cause.** Dual mega icon packages. `@tabler/icons-react` (chrome, top-bar, telemetry-dock) and `lucide-react` (select icons only, `select.tsx:4`) both ship enormous `.d.ts` files. They dominate one-shot parse time. They amplify freezes when the LS reloads the program, but they are not the main reason dashboard edits stall. Track literals plus the canvas are.
+
+**Honesty on the 100s number.** Cold `tsc --incremental false` is about 11s here, not 100s. The reported autocomplete stall is IDE amplification (repeated checks, Next plugin, ESLint) on this fat graph. U01 attacks geometry parse cost. U05 attacks the canvas import on the playground store. Do not treat geometry JSON alone as proof that a 100s stall is gone until the U05 probe is timed.
+
+**Not the cause.**
+
+- A used 50,000-member literal union on coordinates. Exports widen to `Track`. `CatalogTrack` is unused. Parsing the arrays still hurts.
+- Circular imports. None found (`madge` clean).
+- Barrel alone. No imports of `@/components/dashboard` root were found. Subpath imports still load the canvas.
+- Moving files under a `legacy/` folder without excluding them from `tsconfig`. The include is every `src` TS file, not the import graph.
+
+**Confirming commands.**
+
+```bash
+npx tsc --noEmit --extendedDiagnostics --incremental false
+npx tsc --noEmit --incremental false --generateTrace ./trace-out
+npx @typescript/analyze-trace ./trace-out --forceMillis 100
+npx tsc --noEmit --listFilesOnly | findstr /i ".next"
+# editor: time autocomplete after U05 (not U01) on the playground store file
+```
+
+Always pass `--incremental false` when measuring. Incremental runs understate type count and check cost.
+
+**Fix order.** U01 moves geometry to JSON, narrows `tsconfig`, and makes the catalog lazy without static per-track imports. U04/U05 stop importing the canvas for types (that edit is forbidden in U01). Drop or tree-shake one icon package in U08 if measurements still show pain.
+
+---
 
 ## 3. Module audit table
 
-Verdicts are keep, rebuild, merge, move, and delete. Delete means code with no purpose. Rebuild means write from goals without reading the old code.
+Verdicts. keep, rebuild, merge, move, delete. Delete only for code with no purpose. Rebuild means goals and contracts first, without copying the old implementation.
 
-| Path | Purpose | Smells found | Verdict | Reason |
+| Path | Purpose | Smells | Verdict | Reason |
 |---|---|---|---|---|
-| `src/track/frame.ts:115` | Planar frame types and arc sampling in meters. | `WeakMap` cache keyed by array identity. Small and clear. | Keep | Clean foundation. Add TSDoc units and branded IDs later. |
-| `src/track/catalog.ts:95` | Registers 25 tracks and racelines. | Imports all tracks eagerly. `as const satisfies` retains 50000 literal types. Alias fixup for `mexico-city`. | Rebuild | Goal is a lazy registry. Inputs are track IDs. Output is `Track` and raceline. Smallest API is `trackById` plus `raceLineFor` plus `trackIds`. Load geometry on demand. |
-| `src/track/spa.ts` plus 24 siblings | Centerline and raceline ground truth. | 928 to 2804 lines of numeric literals inside `.ts`. Construction mixed with data. | Move | Data is valid. Move rows to `src/track/data/geometry/<id>.json`. Keep a generated loader. Delete the `.ts` literals. |
-| `src/track/real-telemetry.ts:55` | Real F1 traces for 3 tracks. | Static JSON imports. Hardcoded `BY_ID`. `as TrackTelemetry` cast on line 32. | Rebuild | Goal is typed telemetry access. Inputs are track ID. Output is `TrackTelemetry` or a typed missing value. Smallest API is `trackTelemetry` returning a `Result`. Validate JSON with a schema at the boundary. |
-| `src/track/data/spa-telemetry.json` and siblings | Equal distance telemetry samples. | None. Real data. | Keep | Move path unchanged. Add schema validation. |
-| `src/track/lap-metrics.ts:525` | Physics lap synthesis and metric ranges. | Long file. Inline constants `A_LAT0`, `V_MAX=94.5`. Duplicated battery and tyre proxies. Cache warming with `queueMicrotask`. Mixed abstraction levels. | Rebuild | Goal is pure lap math. Inputs are resampled centerline and optional real trace. Output is `LapMetrics` with meters per second and 0 to 1 pedals. Smallest API is `buildLapMetrics`, `sampleSeries`, `metricRange`, `formatMetricValue`. No React imports. No module level work. |
-| `src/track/section-maps.ts:331` | Sector, ERS, and battery zones. | Fixture zones inline. `MAX=16` cap. Thresholds mixed with logic. | Merge | Works but is not standalone. Fold zone derivation into analysis behind one function. Keep fixture zones as JSON data. |
-| `src/track/ribbon.ts:463` | Ribbon and stroke geometry builders. | Math heavy. `tangentAt` computed then recomputed. `sidesCache` repeats frame cache. No tests. | Keep | Geometry is correct and focused. Split only if it grows past 300 lines. Add characterization tests first. |
-| `src/track/smooth.ts:50` | Catmull Rom resample with cache. | Imports `three` for pure math. `WeakMap` grows per spacing. | Merge | Small helper. Merge into analysis or geometry sampling. Remove `three` dependency with a local spline. |
-| `src/track/colormaps.ts:227` plus `colormaps.json:64085` | Palette LUTs and sampling. | JSON import plus code in one module. `monoRamp(256)` generated at runtime. | Move | Palettes are data. Move tables to JSON. Keep a 30 line sampler. |
-| `src/track/heatmap-presets.ts:43` | Metric to palette mapping. | None. Tiny and clear. | Keep | One reason to change. Keep as config. |
-| `src/components/dashboard-canvas.tsx:3697` | Road, heatmap, sections, cars, hover, camera, panels, legends. | Oversized file. About 66 memo and frame hooks. Imperative refs. Magic numbers. Duplicated `fitTrack` logic. Exports 30 plus symbols at line 3824. | Rebuild | Goal is a thin scene composer. Inputs are `Track`, `LapMetrics`, and view state. Output is a React Three Fiber scene. Rebuild each piece from its visual goal. Do not copy the old file. Keep the old file pinned until the integration unit deletes it. |
-| `src/components/dashboard/store.tsx:472` | Dashboard state provider. | About 30 `useState` calls. Render phase `setHoverClearedFor`. Huge memo dep list with eslint disable. Duplicate `fitTrackLocal`. | Rebuild | Goal is explicit dashboard state. Inputs are initial track and view. Output is state plus actions. Smallest API is one reducer plus selectors. No geometry math inside. |
-| `src/components/dashboard/types.ts:125` | Shared dashboard types. | `derived.view: RefObject` leaks React refs into domain. Untyped `sizeRef` cast downstream. | Rebuild | Goal is the contract unit. Define branded `TrackId`, `Meters`, `Seconds` once. Use discriminated unions for view and layer state. This file becomes the foundation contract. |
-| `src/components/dashboard/scene.tsx:180` | R3F canvas wiring. | `derived as` casts. Eslint disable for refs. Duplicated theme logic. | Rebuild | Goal is wiring only. Inputs are store state. Output is Canvas children. No business logic. |
-| `src/components/dashboard/shell.tsx:96` | Provider plus scene plus loader. | `setGone` in render. Magic 600ms timeout. Boolean `controls` hides all panels. | Merge | Thin composer. Merge into one shell module with explicit props. |
-| `src/components/dashboard/panels.tsx:81` | Adapter from store to panels. | Pure pass through. Re export churn. | Merge | No logic of its own. Merge into shell or controls module. |
-| `src/components/dashboard/index.ts:62` | Public barrel. | Re exports the whole canvas. Pulls `three` and all tracks into every consumer. | Delete | Barrel has no purpose after the split. Import from direct paths. Justify deletion because deep imports replace it with no behavior loss. |
-| `src/app/dashboard/page.tsx:14` | Playground route entry. | None. | Keep | Trivial server entry. Keep. |
-| `src/app/dashboard/lap-comparison/page.tsx:18` | Real app route entry. | Hardcoded `controls=false`. Hardcoded `car1Visible:false`. | Keep | Entry is correct for a fresh start. Move flags into explicit route config in the foundation unit. |
-| `src/app/dashboard/lap-comparison/chrome.tsx:246` | Floating docks and user bar. | Dead `CornerButton`. No op zoom and locate buttons. Repeated `useSyncExternalStore` boilerplate. Hardcoded avatar. | Rebuild | Goal is route chrome. Inputs are navigation callbacks and user state. Output is positioned controls. Smallest API is `BackButton`, `UserBar`, `BottomLeftControls` with real callbacks. No dead buttons. |
-| `src/app/dashboard/lap-comparison/shell-client.tsx:34` | Client loader for the shell. | Duplicate loader fallback with `shell.tsx`. | Merge | Merge loader into the shell module. One loading pattern only. |
-| `src/components/track-view-app.tsx:44` | Deprecated root view. | Marked deprecated. Hardcoded `spa` and blue line. | Keep | User asked to keep unused components. Judge as low quality. Rebuild only when reused. Isolate from the app graph. |
-| `src/components/track-canvas.tsx:502` | Older ortho track view. | Superseded by dashboard canvas. Module global raycaster. Side effects in effects. | Keep | User asked to keep unused components. Judge as usable reference for simple ortho views. Isolate from the app graph. |
-| `src/components/playback-context.tsx:273` | Lap playback with keyboard and rate. | Three contexts plus mutable export. Global key handler. | Rebuild | Goal is playback state. Inputs are lap duration in milliseconds. Output is time ratio and actions. Rebuild as one reducer when lap comparison needs it. |
-| `src/components/telemetry-chart.tsx:419` | ECharts speed and delta chart. | Heavy chart dependency for one chart. Imperative handle. | Keep | Works and may serve lap comparison. Judge as heavy but functional. Wrap behind a chart contract so a lighter chart can replace it. |
-| `src/components/telemetry-dock.tsx:193` | Chart tabs and transport. | `useMemo` identity workaround is honest. Split subscribers are good. | Keep | Works. Keep until lap comparison defines its dock. |
-| `src/components/timeline-scrubber.tsx:464` | Scrubber with hover tip portal. | Large animation logic. 464 lines for one control. | Rebuild | Goal is a scrubber. Inputs are 0 to 1 ratio and callbacks. Output is pointer events. Rebuild from interaction goals when needed. |
-| `src/components/toolbar.tsx:108` | Pill tab bar. | Shared `layoutId` can collide across instances. | Keep | Small and reusable. Fix `layoutId` on reuse. |
-| `src/components/top-bar.tsx:93` | Deprecated toolbar. | Local state only. Dead menus. | Keep | Unused but kept per instruction. Isolate. |
-| `src/components/map-focus.tsx:25` | Focus lock context. | None. | Keep | Tiny and clear. |
-| `src/components/icon-button.tsx:36` | Shared icon button. | None. | Keep | Tiny and clear. |
-| `src/components/ui/avatar.tsx`, `dropdown-menu.tsx`, `select.tsx` | Vendored shadcn wrappers. | None. | Keep | Vendored UI. Do not touch. |
-| `src/lib/telemetry.ts:176` | Spa only playback series. | Module level `trackTelemetry('spa')`. Throws if missing. Fake `SECTORS` unrelated to `section-maps.ts`. Spa only. | Rebuild | Goal is lap comparison data access. Rebuild as track agnostic selectors over `LapMetrics`. Delete Spa globals. Code works but is not useful beyond one demo. |
-| `src/lib/utils.ts` | Re exports `cn`. | None. | Keep | One line. Keep. |
-| `src/lib/quiet-three-clock-warning.ts:33` | Filters Three.js clock warning. | Global console patch. Guarded once. | Keep | Works. Keep isolated in view layer. |
-| `src/lib/hover-tip-animation.ts` | Hover spring helpers. | Read briefly. Animation only. | Keep | Keep with scrubber. Reassess on rebuild. |
-| `scripts/build-tracks.mjs:156` | Generates track modules from CSV. | Writes `.ts` literals. This is the freeze generator. | Keep | Keep script. Change output to JSON plus a small loader. |
-| `scripts/fetch-f1-telemetry.py` | Fetches FastF1 telemetry. | Not read in full. Boundary script. | Keep | Keep. Add schema check on output. |
+| `src/track/frame.ts` | Planar types, `toScene`, `boundsOf`, `samplePath` | Clear. WeakMap arc cache | Keep | Foundation. Add brands and TSDoc units in U01 |
+| `src/track/catalog.ts` | Eager registry of 25 tracks | Eager imports. Unused `CatalogTrack`. Alias `mexico-city` | Rebuild | Lazy `trackById` / `raceLineFor` / `listTrackIds`. Load JSON on demand |
+| `src/track/*.ts` (25 circuits) | Centerline + raceline ground truth | ~95% numeric literals in `.ts` | Move | Emit JSON from `build-tracks.mjs`. Delete `.ts` literals |
+| `src/track/real-telemetry.ts` | FastF1 traces for 3 tracks | `as TrackTelemetry` casts L32-34. `b` unused by heatmaps | Rebuild | Owned by **U01** as `loadTelemetry`. Schema at boundary. `Result`. U06 may start using lap `b` |
+| `src/track/data/*-telemetry.json` | Equal-distance series | Fine as data | Keep | Stay as JSON. Validate once |
+| `src/track/lap-metrics.ts` | Physics + real metric channels | Long. Inline constants. Mixed sources. Exported unused helpers | Rebuild | Pure `buildLapMetrics`. Named constants with units. No module-level work |
+| `src/track/section-maps.ts` | Sector and ERS zones | Fixtures inline. Calls `lapMetrics` | Rebuild → `sections.ts` | Fixtures to JSON. One pure `resolveSections` |
+| `src/track/ribbon.ts` | Ribbon and stroke buffers | Heavy. Some unused exports (`edgeLoops`) | Keep | Focused geometry. Characterize before touch |
+| `src/track/smooth.ts` | Resample with Catmull-Rom | Depends on `three` | Merge into analysis | Local spline. Drop `three` from analysis |
+| `src/track/colormaps.ts` + `.json` | Palette LUTs | Data next to sampler | Move data, keep sampler | JSON under `data/`. ~30 line sampler |
+| `src/track/heatmap-presets.ts` | Metric ↔ palette presets | Tiny | Keep | Config |
+| `src/components/dashboard-canvas.tsx` | Scene + panels + playground state | God file. Long functions. Magic numbers. Exports library API | Rebuild | Split into viewer pieces from visual goals. Keep file pinned until U09 |
+| `src/components/dashboard/store.tsx` | Provider state | Many `useState`. Geometry in store. Duplicated fit | Rebuild | One reducer. No geometry math |
+| `src/components/dashboard/types.ts` | Dashboard contracts | Imports types from canvas. RefObject in derived | Rebuild | Move to domain/viewer contracts. No canvas import |
+| `src/components/dashboard/scene.tsx` | Canvas wiring | Casts on derived refs | Rebuild | Thin wiring only |
+| `src/components/dashboard/panels.tsx` | Pass-through to Debug/Items | No logic | Merge | Into playground controls |
+| `src/components/dashboard/shell.tsx` | Provider + loader | Render-phase `setGone`. Magic timeout | Merge | One shell pattern with lap-comparison |
+| `src/components/dashboard/index.ts` | Barrel | Re-exports canvas | Delete | Direct imports. No behavior loss |
+| `src/app/dashboard/page.tsx` | Playground entry | Thin | Keep | Later point at playground shell |
+| `src/app/dashboard/lap-comparison/page.tsx` | Real app entry | Hardcoded flags | Keep | Flags become route config |
+| `src/app/dashboard/lap-comparison/chrome.tsx` | Floating chrome | Stub zoom/locate. Settings/logout no-ops | Rebuild | Goals-first chrome with real callbacks or removed stubs |
+| `src/app/dashboard/lap-comparison/shell-client.tsx` | `dynamic(..., { ssr:false })` | Duplicate loader UI | Merge | One loader story |
+| `src/components/track-view-app.tsx` | Deprecated spa viewer | Hardcoded spa. Broken export name vs old root import | Keep (isolate) | User keeps unused. Move under `legacy/` so LS graph stays clean |
+| `src/components/track-canvas.tsx` | Older ortho viewer | Superseded | Keep (isolate) | Reference quality. Isolate |
+| `src/components/playback-context.tsx` | Playback + keyboard | Triple context. Global keys | Rebuild when needed | One reducer. Do not wire until comparison needs it |
+| `src/components/telemetry-dock.tsx` | Chart + scrubber chrome | Tied to spa globals | Keep (isolate) | Reuse later behind contracts |
+| `src/components/telemetry-chart.tsx` | ECharts lap chart | Heavy dep for one chart | Keep | Wrap behind chart contract |
+| `src/components/timeline-scrubber.tsx` | Scrubber UI | Complex | Keep (isolate) | Rebuild from goals when playback lands |
+| `src/components/top-bar.tsx` / `toolbar.tsx` / `icon-button.tsx` / `map-focus.tsx` | Old chrome | Unused by new routes | Keep (isolate) | Quality varies. Isolate |
+| `src/lib/telemetry.ts` | Spa playback series | Module throw. Spa-only. Fake sectors | Rebuild or delete after migration | Works for old dock. Not useful for multi-track app |
+| `src/lib/utils.ts` / `hover-tip-animation.ts` / `quiet-three-clock-warning.ts` | Helpers | Quiet-three is a console patch | Keep | Document why for quiet-three |
+| `src/components/ui/*` | shadcn/base-ui | Dual icons via lucide in select | Keep | Prefer one icon set in a later unit if measured |
+| `scripts/build-tracks.mjs` | CSV → TS modules | Emits `.ts` literals | Rebuild emit target | Emit JSON. Keep CSV parse |
+| `scripts/pin-dashboard-contract.mts` | Characterization pin | Good | Keep | Expand coverage in U01 |
+| `scripts/fetch-f1-telemetry.py` | Telemetry generator | Not fully read this session | Keep | Assume continues to write JSON |
 
-Code that works but is not useful. `src/lib/telemetry.ts` Spa globals work but serve one demo. `top-bar.tsx` menus render but do nothing. `chrome.tsx` zoom and locate buttons render but are no ops. `track-view-app.tsx` renders but is deprecated. These stay isolated per the keep unused instruction but must not join the app bundle.
+**Works but not useful for the growing app.** Spa-only globals in `lib/telemetry.ts`. Heatmaps reading only `pack.a` while `b` sits unused (`lap-metrics.ts:136-138`). Car 2 on the map is a lateral offset of the raceline (`store.tsx:45`, `CAR2_LATERAL_M`), not telemetry lap `b`. Playground `metricsSource` frozen to `'auto'` in `dashboard-canvas.tsx:3265`. Stub chrome buttons. Unused `CatalogTrack`. Unused `edgeLoops` export. Dual state trees (`DashboardCanvas` vs `store.tsx`) still ship in parallel.
+
+---
 
 ## 4. Target architecture
 
-Layers run one way. Data, then domain types, then pure analysis, then state, then UI. No layer imports upward.
+### Layers (one way)
 
-Proposed layers with justification:
+| Layer | Owns | May import | Must not import |
+|---|---|---|---|
+| data | JSON geometry, telemetry, fixtures, palettes | nothing internal | anything |
+| domain | Branded IDs, units, `Track`, schemas, `Result` | data schemas only | analysis, state, ui |
+| analysis | Pure lap math, sections, resample, palette sample, ribbon buffers | domain, data | react, three, next |
+| state | Reducers and selectors | domain, analysis | ui, next/router |
+| ui | R3F scene pieces, DOM chrome, routes | state, analysis, domain, data | (other features' internals) |
 
-- `data`. Static JSON, CSV outputs, constants, fixtures, schemas. Justification is that data changes on a different rhythm than logic. Geometry updates come from TUMFTM. Telemetry comes from FastF1. Palettes come from design. None of these should trigger logic edits.
-- `domain`. Branded types, units, discriminated unions, schemas. Justification is that every future feature needs the same words for meters, seconds, track IDs, and lap fractions. One file owns the words.
-- `analysis`. Pure functions over `Track` and telemetry. Justification is testability. Physics, sections, ranges, and formatting run without React, Three.js, or the router.
-- `state`. Reducers and selectors for dashboard and lap comparison. Justification is that UI state churns fast. Reducers keep transitions explicit and testable.
-- `ui`. React Three Fiber scene pieces and DOM chrome. Justification is that rendering changes for visual reasons. It consumes state but never computes physics.
+Justification. Data changes when tracks or telemetry update. Domain words must stay stable for every future analysis. Analysis must be testable without a browser. State churns with UI. Rendering changes for visual reasons and must not re-derive physics.
 
-Import rule that enforces the direction. Add an ESLint rule with `eslint-plugin-import` or a `dependency-cruiser` config. Rule text is short. `data` imports nothing internal. `domain` imports `data` schemas only. `analysis` imports `domain` and `data`. `state` imports `domain` and `analysis`. `ui` imports `state`, `analysis`, `domain`, `data`. No imports from `ui` into `state` internals. No imports from `analysis` into `ui` or `state`. No barrel re exports across layers. The foundation unit adds this config and a test that fails on violation.
+### Import rule (enforceable)
 
-Organize by feature. `lap-comparison` is self contained under `src/app/dashboard/lap-comparison` plus `src/features/lap-comparison`. Shared track viewer pieces live under `src/features/viewer`. Playground code stays under `src/app/dashboard` and `src/features/playground`. Code moves from playground to app by promotion. A playground piece graduates only when it has a contract, tests, and docs. It is copied into the feature folder through the contract, not imported from the playground. The playground can import shared code. Shared code never imports the playground.
+Add `dependency-cruiser` (or `eslint-plugin-boundaries`) in U01.
 
-How to add each extension:
+```text
+data → (none)
+domain → data
+analysis → domain, data
+state → domain, analysis
+ui → state, analysis, domain, data
+app → ui/features only
+```
 
-- New data source. Add JSON under `src/track/data/<source>/`. Add a Zod or Valibot schema under `domain`. Add one loader function that returns a `Result`. Add fixtures under `analysis/__fixtures__`. No logic file edits outside the loader and registry.
-- New metric. Add the metric ID to the domain union. Add one pure computer in `analysis`. Add range and format entries. Add a palette preset entry. UI picks it up through the metric contract. No scene edits.
-- New chart. Add a component under the feature folder that consumes `LapMetrics` series through selectors. It does not import ECharts internals elsewhere. Chart mode stays a discriminated union.
+Forbidden. `analysis` importing `three` or `react`. `domain` importing UI. Barrel re-exports across layers. Feature A importing Feature B internals.
 
-Conventions:
+### Organize by feature
 
-- File size. Soft limit 250 lines. Hard review trigger at 400 lines. One component or one pure module per file.
-- Naming. Booleans read as questions. Functions are verb plus noun. Collections are plural. Units appear in names or TSDoc. Files are kebab case. Types are PascalCase.
-- TSDoc. Every export gets one short contract with units. Meters or kilometers. Seconds or milliseconds. Kilometers per hour for display speed. Comments state why only. Delete what comments.
-- Error handling. Parse at the boundary with schemas. Return `Result<T, DomainError>` or throw a typed error, one pattern per layer. Never `null` or `undefined` as a signal. Never error codes. Never `any`. Never unchecked casts.
-- Tests. Colocate as `*.test.ts` next to the module. Characterization tests pin current behavior before a rebuild. Test first tests define rebuilt contracts. Test public outputs, not internals.
+- `src/features/viewer/` holds scene pieces rebuilt from goals (road, racing line, heatmap, sections, car, hover, camera).
+- `src/features/playground/` holds playground store and debug panels.
+- `src/features/lap-comparison/` holds comparison store, chrome, and later delta chart.
+- `src/track/` holds data, domain, analysis (shared by all features).
+- `src/components/legacy/` holds kept unused viewers so they leave the hot graph.
+- `src/components/ui/` stays shared primitives.
 
-Final folder tree:
+**Promotion rule.** Playground may import `viewer` and `track`. Shared code never imports playground. A lab experiment graduates by gaining a contract, tests, and a home under the feature that needs it. Copy through the contract. Do not keep a permanent import from playground into the app.
+
+### How to add extensions
+
+- **New data source.** Drop JSON under `src/track/data/<source>/`. Add a schema in domain. Add one loader returning `Result`. Register in catalog. No scene edits.
+- **New metric.** Extend `MetricId` union. Add one pure computer in analysis. Add range and format. Add optional palette preset. UI discovers via registry.
+- **New chart.** Add a component under the feature that consumes series selectors. Chart library stays behind one adapter module.
+
+### Conventions
+
+- File soft limit 250 lines. Review trigger at 400.
+- Functions roughly 5 to 20 lines. Split for clarity, not for length.
+- Booleans read as questions. Functions are verb plus noun. Collections are plural.
+- Every export gets short TSDoc with units (m, m/s, ms, lap fraction 0–1).
+- Comments explain only non-obvious why. Delete what-comments.
+- Errors. `Result<T, DomainError>` at data boundaries. Typed throws inside UI for programmer mistakes. Never null as a signal. Never error codes. Never `any`. No unchecked casts after parse.
+- Tests colocated as `*.test.ts`. Characterization before rebuilds. Test public contracts and visible output.
+- Abstractions only on second concrete use. No single-impl interfaces.
+
+### Final folder tree
 
 ```text
 src/
@@ -153,8 +492,6 @@ src/
       page.tsx
       lap-comparison/
         page.tsx
-        chrome.tsx
-        shell-client.tsx
   features/
     viewer/
       road.tsx
@@ -165,14 +502,15 @@ src/
       hover-probe.tsx
       camera.tsx
       shell.tsx
+    playground/
+      store.ts
       panels.tsx
+      shell.tsx
     lap-comparison/
       store.ts
-      selectors.ts
-      delta-chart.tsx
-      comparison-scene.tsx
-    playground/
-      debug-panels.tsx
+      chrome.tsx
+      shell.tsx
+      delta-chart.tsx          # when product needs it
   track/
     data/
       geometry/<id>.json
@@ -185,338 +523,338 @@ src/
     sections.ts
     ribbon.ts
     colormaps.ts
+    heatmap-presets.ts
   lib/
     result.ts
-    format.ts
   components/
     ui/
+    legacy/                   # isolated unused keepers
+  app/globals.css
+  app/layout.tsx
 ```
 
-Dependency diagram:
+Dependency diagram.
 
-- `app` imports `features` and `state`.
-- `features/viewer` imports `state`, `analysis`, `domain`, `data`.
-- `features/lap-comparison` imports `state`, `analysis`, `domain`.
-- `state` imports `analysis` and `domain`.
-- `analysis` imports `domain` and `data`.
-- `domain` imports `data` schemas.
-- `data` imports nothing internal.
+```text
+app → features → state(in feature) → analysis → domain → data
+                 ↘ viewer (ui) ↗
+legacy ⟂ (no imports into features)
+```
+
+### Architect synthesis
+
+Three shapes were explored.
+
+1. **Feature-sliced** (`features/*` + `shared/data` hooks). Strong promotion story. Risk of inventing `shared/` too early.
+2. **Domain-first minimal folders.** Strong typing and purity. Risk of under-isolating the real app from the playground.
+3. **Laziness extreme.** JSON move + split canvas in place under existing names. Fastest freeze fix. Risk of leaving ownership muddy.
+
+**Chosen base.** Domain-first layers with feature folders only where ownership is real (`viewer`, `playground`, `lap-comparison`). No `shared/` mega-tree. Graft lazy JSON catalog and icon cleanup from the freeze evidence. Graft promotion rule from the feature-sliced runner.
+
+---
 
 ## 5. Rejected alternatives
 
-Alternative A. Keep `.ts` geometry and fix only `tsconfig`. Rejected because literal tuple types stay in the program. `catalog.ts:61` keeps a 50000 member literal union. Autocomplete stays slow. Build stays slow. Data stays mixed with logic.
+| Alternative | Why rejected |
+|---|---|
+| Fix only `tsconfig`, keep `.ts` geometry | Literals stay in the program. Freeze remains. Data stays in logic files |
+| Deep barrels per layer | Current `index.ts` already shows the cost. Direct imports win |
+| Full state library (Redux/Zustand) now | Two reducers cover need. No second concrete use |
+| Eager load all tracks + virtualize draw | No measurement. Lazy load by ID is smaller |
+| Rewrite canvas in place without pins | 3,862 lines without tests. Characterization first |
+| Introduce Session / driver model in U01 | No product surface yet. Speculative generality |
+| Split canvas only under `components/dashboard` with zero `features/` | Viable laziness path. Rejected as the long-term owner for lap-comparison because playground and app would keep sharing one folder. `features/` earns its place once two consumers of `viewer` exist (playground + lap-comparison) |
+| Add Zod without multiple schemas | Hand parsers for one shape are enough. If U01 introduces ≥2 JSON schemas, Zod earns its place as one dep |
+| Workers / typed-array rewrite now | Defer until analysis benchmark exceeds budget in section 7 |
 
-Alternative B. One shared core with deep barrels. Rejected because barrels caused the fan out. `index.ts:39` proves the cost. Deep direct imports are faster to resolve and easier to trace. One barrel per feature is still a choke point.
-
-Alternative C. Full state library now. Rejected because two reducers cover the need. Dashboard state and lap comparison state are small. A library adds layers without a second concrete use. The plan justifies each abstraction. This one has no justification yet.
-
-Alternative D. Eager load all tracks with virtualized rendering. Rejected because geometry is 1.4 MB of source and grows with each track. Lazy load by ID is simpler. Virtualization has no measurement behind it. Optimize after measuring per principle 13.
-
-Alternative E. Rewrite the canvas in place. Rejected because a 3697 line file cannot be rewritten safely without pins. The plan keeps the old canvas pinned, builds thin pieces against contracts, then deletes the old file in the integration unit. This follows the verifiable units rule.
+---
 
 ## 6. Work units and the dependency table
 
-Rules honored. No two units own the same file. Routes and configs belong to U01 or U09. Shared contracts live in U01. Each unit builds and passes tests alone in dependency order. Each unit caps at about 15 files.
+Rules. No two units own the same file. Shared contracts live in U01. Each unit is one session (~15 files max). Each leaves build + types + tests green alone in dependency order. Foundation includes safety net and freeze fix. Last unit removes old paths.
 
-### U01. Foundation contracts, safety net, and editor fix
+### U01. Foundation contracts, safety net, editor fix
 
-Goal. Define shared contracts and unfreeze autocomplete.
+**Goal.** Move geometry out of TypeScript literals, keep every existing caller compiling, and cut language-service parse cost.
 
-Depends on. None. All other units depend on this.
+**Depends on.** None.
 
-Owned paths. `tsconfig.json`, `eslint.config.mjs`, `.dependency-cruiser.cjs` or equivalent, `src/track/domain.ts`, `src/lib/result.ts`, `src/track/data/geometry/*.json`, `src/track/data/telemetry/*.json`, `src/track/data/palettes.json`, `scripts/build-tracks.mjs`, `tests/characterization/*`, `scripts/measure-tsc.mjs`.
+**Owned paths.** `tsconfig.json`, `package.json` (test runner + `npm test` only), vitest config, `eslint.config.mjs`, optional `.dependency-cruiser.cjs` (fixture-only, see tasks), `src/track/domain.ts`, `src/lib/result.ts`, `src/track/catalog.ts`, `src/track/frame.ts` (TSDoc units only, no nominal brands on `x`/`y`), `src/track/real-telemetry.ts`, `src/track/data/geometry/*.json`, existing `src/track/data/*-telemetry.json` (paths stay unless `real-telemetry.ts` is updated in the same unit), deletion of `src/track/<circuit>.ts` literal modules, thin `src/track/spa.ts` re-export while `track-view-app.tsx` still imports it, `scripts/build-tracks.mjs`, `scripts/pin-dashboard-contract.mts`, `scripts/pin-dashboard-contract.baseline.json`, `scripts/measure-tsc.mjs`.
 
-Forbidden paths. `src/components/dashboard-canvas.tsx`, `src/components/dashboard/*`, `src/app/dashboard/**/*`, `src/track/lap-metrics.ts`, `src/track/ribbon.ts`.
+**Forbidden paths.** `src/components/**/*`, `src/app/**/*`, `src/track/lap-metrics.ts`, `src/track/section-maps.ts`, `src/track/ribbon.ts`, `src/track/colormaps.ts`, `src/track/colormaps.json`, `src/track/heatmap-presets.ts`, `src/track/smooth.ts`.
 
-Contracts consumed. None.
+**Contracts consumed.** None.
 
-Contracts produced. `TrackId`, `Meters`, `Seconds`, `LapFraction`, `Track`, `TrackSample`, `LapMetrics`, `MetricId`, `SectionZone`, `Result<T, DomainError>`, `trackById`, `raceLineFor`, `trackTelemetry`, loader signatures.
+**Contracts produced.** `TrackFile` (JSON shape with **wide** `number[][]` or tuple-of-number annotations, never inferred literal unions), `parseTrack`, `Track`, `TrackSample`, `Xy` (still plain `number` fields), `Result`, `listTrackIds`, `trackById`. **Compat exports that must remain.** `TRACKS`, `RACE_LINES`, `raceLineFor`, `trackTelemetry`, `sampleTrace`. Callers in canvas, store, and the pin keep their import names. New names may exist beside them. Do not rename `lapMetrics` or `resolveSectionMap` in this unit.
 
-Tasks in order:
+**Tasks.**
 
-1. Narrow `tsconfig.json:25` include to `src/**/*.ts`, `src/**/*.tsx`, `next-env.d.ts`. Exclude `node_modules` and `.next`.
-2. Change `scripts/build-tracks.mjs:75` to emit `src/track/data/geometry/<id>.json` plus a tiny loader. Keep CSV parsing unchanged.
-3. Move all 25 center and race arrays to JSON. Delete literals from `src/track/*.ts`. Keep thin re export shims only if imports demand it during migration.
-4. Move `colormaps.json` rows and `section-maps.ts` fixtures to `src/track/data/`. Keep samplers in code.
-5. Write `src/track/domain.ts` with branded types, units in TSDoc, discriminated unions, and Zod schemas for geometry and telemetry JSON.
-6. Write `src/lib/result.ts` with one `Result` type and typed errors.
-7. Rewrite `src/track/catalog.ts` as a lazy registry with `trackById` and `raceLineFor`. Remove `as const` literal retention.
-8. Add import boundary rule config plus a failing test on violation.
-9. Add characterization tests for `samplePath`, `lapMetrics`, `resolveSectionMap`, `ribbonPositions`, and catalog lookup. Capture `pin-dashboard-contract` output as baseline.
-10. Add `scripts/measure-tsc.mjs` that runs `tsc --extendedDiagnostics` and records program files and check time.
+1. Narrow `tsconfig.json` include to `src/**/*.ts(x)`, `next-env.d.ts`. Exclude `node_modules`, `.next`, and (once U08 exists) `src/components/legacy/**`.
+2. Install Vitest (or chosen runner). Add `npm test`. Own those `package.json` lines.
+3. Change `build-tracks.mjs` to emit `src/track/data/geometry/<id>.json` and regenerate `catalog.ts` import list from `TRACK_JOBS`.
+4. Replace 25 literal modules with JSON. **JSON typing rule.** Every geometry import is annotated as `TrackFile` (or `number[][]`) before `parseTrack`. Do not let TypeScript infer thousands of literal tuples from JSON. That recreates the freeze.
+5. **Caller-compat rule.** Keep exporting `TRACKS` and `RACE_LINES` so `dashboard-canvas.tsx` and `store.tsx` compile without edits. Prefer sync catalog built by mapping parsed JSON (wide-typed) over a rename to `trackById` only. Lazy `trackById` may exist as an addition. Removing `TRACKS` fails this unit.
+6. Keep thin `spa.ts` re-export of parsed spa geometry for `track-view-app.tsx`.
+7. Write `domain.ts` with shared types and TSDoc units. **No nominal brands on meter fields** in U01. Brands on IDs may wait. Plain `number` keeps ribbon, canvas, and Three.js compiling.
+8. Write `result.ts`. Rebuild `real-telemetry.ts` with boundary parse. Keep file paths or update imports inside this owned file only. Keep `trackTelemetry` / `sampleTrace` names.
+9. Do **not** move `colormaps.json` or extract section fixtures here. Those stay for U02/U03 so U01 does not edit their owner files.
+10. Dependency-cruiser is optional. If added, ship a **fixture that proves one rule**, and allow `smooth.ts` → `three` until U02. Do not fail the whole repo on that edge in U01.
+11. Keep the existing pin digests (zones, sides, offset). Prefer spa-first load inside the pin. Do not require full-catalog eager load for the default pin run.
+12. Add `measure-tsc.mjs` with `--incremental false`.
 
-Tests to write or keep passing before the change. New characterization tests. Existing build passes. `npx tsc --noEmit` passes.
+**Tests before change.** Pin baseline matches. After change, update baseline only when intentional. `npm test` runs the pin (or a thin wrapper around it).
 
-Acceptance criteria. Build passes. Type check passes. Tests pass. `any` does not appear in owned paths. No what comments remain. No inline data remains in owned logic files. `tsc --extendedDiagnostics` shows program file drop and check time drop. Editor autocomplete on `store.tsx` responds without a freeze. `tsc --listFiles` shows no `.next` files.
+**Acceptance.** Build, `tsc`, pins, and `npm test` pass without editing `src/components/**`. No geometry `.ts` literal bodies remain. Geometry JSON is wide-typed through `parseTrack`. `TRACKS` / `RACE_LINES` / `trackTelemetry` still resolve. `tsc --listFilesOnly` shows no `.next`. Measure and record diagnostics before/after. **Do not** claim the 100s `store.tsx` autocomplete is gone. Canvas still dominates that file until U05. U01 must show a clear drop in geometry parse/check cost.
 
-Rollback. Revert U01 commit. Geometry JSON stays on disk but unused. Old `.ts` literals restore from git. Rerun `tsc --noEmit`.
+**Rollback.** Revert U01. Restore geometry `.ts` from git.
 
 ### U02. Pure analysis rebuild
 
-Goal. Rebuild lap math as pure functions.
+**Goal.** Rebuild lap math and sections as pure functions without breaking frozen callers.
 
-Depends on. U01 contracts.
+**Depends on.** U01.
 
-Owned paths. `src/track/lap-metrics.ts`, `src/track/sections.ts`, `src/track/smooth.ts`, `src/track/colormaps.ts`, `src/track/heatmap-presets.ts`, `src/track/analysis/__fixtures__/*`, adjacent `*.test.ts`.
+**Owned paths.** `src/track/lap-metrics.ts`, `src/track/sections.ts` (new), `src/track/section-maps.ts` (delete after re-export shim or full replace), `src/track/smooth.ts`, `src/track/data/section-fixtures.json` (created here), `src/track/lap-metrics.test.ts`, `src/track/sections.test.ts`, analysis fixtures under `src/track/__fixtures__/`.
 
-Forbidden paths. `src/track/domain.ts`, `src/track/catalog.ts`, `src/track/data/*`, `src/components/**/*`, `src/app/**/*`, `src/lib/result.ts`.
+**Forbidden paths.** `src/track/domain.ts`, `src/track/catalog.ts`, `src/track/data/geometry/*`, `src/track/ribbon.ts`, `src/track/colormaps.ts`, `src/components/**/*`, `src/app/**/*`, `scripts/pin-dashboard-contract.*`.
 
-Contracts consumed. `Track`, `LapMetrics`, `MetricId`, `Result`, schemas from U01.
+**Contracts consumed.** U01 types and telemetry loaders.
 
-Contracts produced. `buildLapMetrics`, `sampleSeries`, `metricRange`, `formatMetricValue`, `seriesFor`, `resolveSections`.
+**Contracts produced.** Pure builders. **Compat aliases required.** `export function lapMetrics ...` and `export function resolveSectionMap ...` remain (or re-export) so canvas, store, and the pin keep compiling. Internal names like `buildLapMetrics` are fine beside them. Update `heatmap-presets.ts` only if `MetricId` import path changes. If so, add that one import-line file to this unit’s owned paths for the redirect only.
 
-Tasks in order:
+**Tasks.**
 
-1. Write test first specs for `buildLapMetrics` from goals. Inputs are resampled centerline in meters and optional real trace. Outputs are speed in meters per second and pedals 0 to 1.
-2. Rebuild physics without reading the old file. Extract named constants with units.
-3. Merge `smooth.ts` spline into analysis without `three`. Merge `section-maps.ts` derivation behind `resolveSections`.
-4. Keep `ribbon.ts` untouched. Keep `colormaps.ts` sampler tiny.
-5. Deduplicate pedal clamp and battery proxy into one helper each.
+1. Characterization tests from current spa/monza outputs (unit owns these test files, not U01).
+2. Rebuild physics and real-trace path. Named constants with units.
+3. Extract section fixtures to JSON here. Replace `section-maps.ts` with `sections.ts` plus compat export.
+4. Remove `three` from resample.
+5. Deduplicate pedal and battery helpers.
 
-Tests. New unit tests for physics ranges, real trace path, missing telemetry path, section caps, formatting units.
+**Acceptance.** Pins still pass (same export names). New unit tests pass. No `three` in analysis. No `any`.
 
-Acceptance criteria. Build passes. Type check passes. Tests pass. No `any`. No what comments. No inline fixture data. No `three` import in analysis. Benchmark in section 7 recorded for 25 tracks.
+**Rollback.** Revert U02.
 
-Rollback. Revert U02 commit. U01 contracts stay. Old analysis restores from git.
+### U03. Geometry and palette sampler
 
-### U03. Geometry and paint layer
+**Goal.** Keep ribbon correct and palette sampling thin.
 
-Goal. Isolate ribbon and palette sampling behind tested contracts.
+**Depends on.** U01. Parallel with U02 if only U01 contracts and unchanged `MetricId` import path are used. If U02 moves `MetricId`, wait for U02 or take the one-line import redirect in U02.
 
-Depends on. U01 contracts. Logically after U02 but can run in parallel if it codes against U01 contracts only.
+**Owned paths.** `src/track/ribbon.ts`, `src/track/colormaps.ts`, `src/track/colormaps.json` (move to `data/palettes.json` here if desired), `src/track/heatmap-presets.ts` (unless U02 took the MetricId redirect), adjacent tests.
 
-Owned paths. `src/track/ribbon.ts`, `src/track/colormaps.ts` sampler part, adjacent `*.test.ts`.
+**Forbidden paths.** `src/track/lap-metrics.ts`, `src/track/sections.ts`, `src/track/section-maps.ts`, `src/track/domain.ts`, `src/components/**/*`.
 
-Forbidden paths. `src/track/lap-metrics.ts`, `src/track/sections.ts`, `src/track/domain.ts`, `src/components/**/*`.
+**Contracts produced.** Stable ribbon and palette signatures. Keep existing export names the pin and canvas already call.
 
-Contracts consumed. `Track`, `Xy`, palette types from U01.
+**Tasks.**
 
-Contracts produced. `ribbonPositions`, `ribbonHeatmap`, `strokePositions`, `samplePalette`, geometry input and output shapes.
+1. Characterization tests on spa/monza ribbon outputs.
+2. Remove dead exports. Bound or document caches.
+3. Optionally move palette tables to JSON with wide typing. Sampler stays small.
 
-Tasks in order:
+**Acceptance.** Pins match within tolerance. No `any`.
 
-1. Add characterization tests for current ribbon outputs on spa and monza.
-2. Remove duplicate tangent computation. Unify `offsetPolyline` and `trackSides`.
-3. Replace module caches with explicit function args or one documented cache with size bound.
-4. Shrink `colormaps.ts` to sampler plus preset lookup.
-
-Tests. Characterization tests plus new edge tests for closed rings and short tracks.
-
-Acceptance criteria. Build passes. Tests pass. No `any`. Outputs match baseline within tolerance. No inline palette data.
-
-Rollback. Revert U03 commit.
+**Rollback.** Revert U03.
 
 ### U04. Viewer scene split
 
-Goal. Replace the canvas monolith with thin scene pieces.
+**Goal.** Split the monolith along its existing export surface so behavior stays pinned.
 
-Depends on. U01, U02, U03.
+**Depends on.** U01, U02, U03.
 
-Owned paths. `src/features/viewer/road.tsx`, `racing-line.tsx`, `heatmap-road.tsx`, `section-road.tsx`, `item-car.tsx`, `hover-probe.tsx`, `camera.tsx`, `shell.tsx`, `panels.tsx`, adjacent tests.
+**Owned paths.** `src/features/viewer/*.tsx` (new), adjacent tests. May **read** `dashboard-canvas.tsx` for extract. Must not edit canvas until U09.
 
-Forbidden paths. `src/components/dashboard-canvas.tsx`, `src/components/dashboard/*`, `src/app/**/*`, `src/track/**/*`.
+**Forbidden paths.** `src/components/dashboard-canvas.tsx` (no writes), `src/components/dashboard/*`, `src/app/**/*`, `src/track/**/*` (import contracts only).
 
-Contracts consumed. Domain types, analysis functions, geometry selectors.
+**Contracts produced.** Viewer props matching today’s exports at `dashboard-canvas.tsx:3824-3850` (`Road`, `Camera`, `ItemCar`, …).
 
-Contracts produced. Viewer component props. Each piece takes plain props with units. No hidden store imports.
+**Tasks.**
 
-Tasks in order:
+1. Prefer **extract / move** along that export block over a from-scratch rebuild. Laziness Protocol. Characterization first.
+2. Contract tests for props in and buffers or digests out (bounds, one heatmap sample, one car pose).
+3. Soft file-size budget ~250–400 lines. Do not invent a file per three-line helper. A measured overflow may add one more file (for example `rig.tsx` for Grid/Camera).
 
-1. Write visual and contract tests for each piece against fixtures. Test props and visible output.
-2. Rebuild each piece from its visual goal without reading `dashboard-canvas.tsx`. Road shows the closed ring. Racing line shows the fast path. Heatmap paints one metric. Sections paint zones. Car places a pose. Hover shows a readout. Camera fits bounds.
-3. Keep functions 5 to 20 lines. Split only when the name says more than the code.
-4. Keep the old canvas file untouched as the behavior pin.
+**Acceptance.** Build passes. Digests match pin tolerances for the extracted pieces. No physics inside viewer files. Canvas remains the playground/runtime pin until U09.
 
-Tests. Component tests with fixtures. No snapshot of internals.
+**Rollback.** Delete `src/features/viewer/*`.
 
-Acceptance criteria. Build passes. Tests pass. No `any`. Each file under 250 lines. No physics in UI files. No `three` math duplicated from analysis.
+### U05. Playground state rebuild
 
-Rollback. Delete `src/features/viewer/*`. Old canvas still serves routes.
+**Goal.** Explicit playground reducer feeding the viewer.
 
-### U05. Dashboard state rebuild
+**Depends on.** U01, U02, U04.
 
-Goal. Replace the dashboard store with an explicit reducer.
+**Owned paths.** `src/features/playground/store.ts`, `panels.tsx`, `shell.tsx`, adjacent tests.
 
-Depends on. U01, U02.
+**Forbidden paths.** `src/components/dashboard-canvas.tsx`, `src/components/dashboard/*`, `src/features/lap-comparison/*`. May **import** `src/track/**` contracts. Must not edit track files.
 
-Owned paths. `src/features/playground/store.ts`, `selectors.ts`, `src/features/playground/debug-panels.tsx`, adjacent tests.
+**Contracts produced.** Playground `State`, `Action`, reducer, selectors.
 
-Forbidden paths. `src/components/dashboard/*`, `src/components/dashboard-canvas.tsx`, `src/features/viewer/*`, `src/track/**/*`.
+**Tasks.**
 
-Contracts consumed. Domain types and analysis selectors.
+1. Test-first transitions for track, layer, hover, camera.
+2. Rebuild panels from display goals.
+3. Shell composes viewer + panels. Stop value-importing `dashboard-canvas.tsx` for types.
 
-Contracts produced. Playground `State`, `Action`, `reducer`, selectors for view, layers, hover, and metrics source.
+**Acceptance.** No render-phase setState. No geometry math in store. Tests pass. Manual autocomplete probe on the new store file. Record timing next to U01 diagnostics. This is where residual canvas-import freeze should die.
 
-Tasks in order:
-
-1. Write test first transitions for track select, orientation change, layer toggle, hover set and clear, camera fly to.
-2. Rebuild as one reducer plus selectors. Remove 30 `useState` calls. Remove render phase setters. Remove eslint disables.
-3. Rebuild debug panels from display goals.
-
-Tests. Reducer transition tests. Selector tests.
-
-Acceptance criteria. Build passes. Tests pass. No `any`. No render phase state sets. No geometry math in state.
-
-Rollback. Revert U05 commit. Old store still serves old routes.
+**Rollback.** Revert U05. Old canvas route still works.
 
 ### U06. Lap comparison feature
 
-Goal. Build the real app slice against contracts.
+**Goal.** Real app slice against contracts.
 
-Depends on. U01, U02, U03, U04.
+**Depends on.** U01, U02, U03, U04.
 
-Owned paths. `src/features/lap-comparison/store.ts`, `selectors.ts`, `delta-chart.tsx`, `comparison-scene.tsx`, `src/app/dashboard/lap-comparison/shell-client.tsx`, `chrome.tsx`, adjacent tests.
+**Owned paths.** `src/features/lap-comparison/store.ts`, `chrome.tsx`, `comparison-scene.tsx`, `delta-chart.tsx` (only if product needs it), `src/app/dashboard/lap-comparison/page.tsx`, delete of route-local `chrome.tsx` / `shell-client.tsx` after move, adjacent tests. **Does not own** `shell.tsx` if U07 will mount playback there. If U07 is skipped, U06 owns `shell.tsx` too.
 
-Forbidden paths. `src/components/dashboard-canvas.tsx`, `src/components/dashboard/*`, `src/features/viewer/*`, `src/track/**/*`, `src/app/dashboard/page.tsx`.
+**Forbidden paths.** `src/components/dashboard-canvas.tsx`, `src/components/dashboard/*`, `src/features/playground/*`, `src/app/dashboard/page.tsx`. May import `src/track/**` contracts. Must not edit track files.
 
-Contracts consumed. Domain, analysis, viewer props.
+**Contracts produced.** Comparison state. Chrome callbacks. Optional delta selectors.
 
-Contracts produced. Lap comparison state, delta selectors in seconds, chart props.
+**Tasks.**
 
-Tasks in order:
+1. Rebuild chrome from goals. Wire or remove stubs.
+2. Compose viewer with comparison defaults.
+3. Add delta chart only when comparing telemetry `a` and `b`. Car 2 offset is not lap `b`.
 
-1. Write test first specs for delta math and two lap selection. Inputs are two `LapMetrics`. Output is per distance delta in seconds.
-2. Rebuild `chrome.tsx` from goals with real callbacks. Delete dead buttons or wire them.
-3. Merge `shell-client.tsx` loader into one pattern. Compose viewer pieces with comparison state.
-4. Wrap `telemetry-chart.tsx` behind a chart contract. Do not fork the chart library.
+**Acceptance.** Route builds. No Spa globals. No dead no-op buttons unless labeled disabled with reason.
 
-Tests. Delta math tests. Store transition tests. Route smoke test.
+**Rollback.** Revert U06.
 
-Acceptance criteria. `/dashboard/lap-comparison` builds and renders two laps with delta. No `any`. No Spa globals. No dead buttons.
+### U07. Playback (optional product gate)
 
-Rollback. Revert U06 commit. Route falls back to prior shell.
+**Goal.** Playback reducer when scrubbing is required.
 
-### U07. Playback and timeline rebuild
+**Depends on.** U01, U06.
 
-Goal. Provide explicit playback for comparison when needed.
+**Owned paths.** `src/features/lap-comparison/playback.ts`, scrubber under the feature, `src/features/lap-comparison/shell.tsx` (mount playback), tests.
 
-Depends on. U01, U06.
+**Forbidden paths.** Legacy `playback-context.tsx` (U08), track sources (import only).
 
-Owned paths. `src/features/lap-comparison/playback.ts`, `src/components/timeline-scrubber.tsx` replacement under features, `src/lib/hover-tip-animation.ts` if touched, adjacent tests.
+**Skip if.** First ship is static map only.
 
-Forbidden paths. `src/components/playback-context.tsx`, `src/components/telemetry-dock.tsx`, `src/track/**/*`.
+**Acceptance.** Play/pause/seek tests pass. Shell mounts scrubber. Lap fraction stays in sync.
 
-Contracts consumed. Lap duration in milliseconds and 0 to 1 ratios.
+**Rollback.** Revert U07.
 
-Contracts produced. Playback reducer, `timeRatio` selectors, scrubber props.
+### U08. Legacy isolation and dead deletion
 
-Tasks in order:
+**Goal.** Remove keepers from the TypeScript program, or delete what has no purpose.
 
-1. Write transition tests for play, pause, rate change, jump, and hover suppress.
-2. Rebuild playback as one reducer. Remove triple context and mutable export.
-3. Rebuild scrubber from interaction goals. Keep animation code only if measured smooth.
+**Depends on.** U04, U05, U06.
 
-Tests. Reducer tests. Scrubber pointer tests.
+**Owned paths.** `tsconfig.json` exclude for legacy (or deletion), moves/deletes of `track-view-app.tsx`, `track-canvas.tsx`, `playback-context.tsx`, `telemetry-dock.tsx`, `timeline-scrubber.tsx`, `top-bar.tsx`, `toolbar.tsx`, `map-focus.tsx`, `icon-button.tsx`, delete `src/components/dashboard/index.ts`, delete or replace `src/lib/telemetry.ts` after call sites gone, optional icon consolidation, delete thin `spa.ts` re-export if nothing imports it.
 
-Acceptance criteria. Build passes. Tests pass. Scrubber stays in sync with playback at 60 fps on spa fixtures or the miss is logged as a follow up.
+**Forbidden paths.** `src/features/**/*`, `src/track/domain.ts`, `src/track/catalog.ts`, `src/track/data/geometry/*`.
 
-Rollback. Revert U07 commit. Old playback context remains isolated.
+**Acceptance.** Moving under `src/components/legacy/` is **not** enough. Either exclude that folder from `tsconfig` include, or delete the files. Grep shows no feature/app imports. Language service no longer loads those modules in the main program.
 
-### U08. Legacy isolation and dead code removal
-
-Goal. Isolate kept experiments and delete code with no purpose.
-
-Depends on. U04, U05, U06.
-
-Owned paths. `src/components/track-view-app.tsx`, `src/components/track-canvas.tsx`, `src/components/playback-context.tsx`, `src/components/telemetry-dock.tsx`, `src/components/telemetry-chart.tsx`, `src/components/top-bar.tsx`, `src/components/toolbar.tsx`, `src/lib/telemetry.ts` legacy path, `src/components/dashboard/index.ts` deletion.
-
-Forbidden paths. All `src/features/**/*`, `src/track/domain.ts`, `src/track/catalog.ts`, `src/track/data/*`, `src/app/**/*`.
-
-Contracts consumed. None new. Must not import new contracts.
-
-Contracts produced. None. This unit produces isolation only.
-
-Tasks in order:
-
-1. Move deprecated viewer files under `src/components/legacy/` or mark with an isolation header. Ensure no app route imports them.
-2. Delete `src/components/dashboard/index.ts` barrel. Fix imports to deep paths.
-3. Delete `src/lib/telemetry.ts` Spa globals after U06 replaces consumers. Justify each deletion with no purpose or full replacement.
-4. Run bundle check to prove legacy files do not join app routes.
-
-Tests. Keep passing. Add an import graph test that fails if app routes import legacy.
-
-Acceptance criteria. Build passes. Tests pass. No app route bundles legacy files. Deletions listed with reasons.
-
-Rollback. Revert U08 commit.
+**Rollback.** Revert moves/excludes/deletes.
 
 ### U09. Integration and old path removal
 
-Goal. Remove the old canvas and verify the whole.
+**Goal.** Point the playground route at the new shell. Delete the monolith and old dashboard wrappers.
 
-Depends on. U04, U05, U06, U07, U08.
+**Depends on.** U04, U05, U06, U08. U07 if playback shipped.
 
-Owned paths. `src/components/dashboard-canvas.tsx` deletion, `src/components/dashboard/*` deletion or shim, `src/app/dashboard/page.tsx`, route configs, docs for promotion from playground to app.
+**Owned paths.** `src/app/dashboard/page.tsx`, `src/components/dashboard-canvas.tsx` (delete), `src/components/dashboard/*` (delete), final pin run. Does **not** reclaim `package.json` test scripts from U01. Does **not** rewrite lap-comparison `page.tsx` if U06 already owns it.
 
-Forbidden paths. None. This unit owns final wiring only. It must not change logic in `src/features/*` or `src/track/*` except imports.
+**Forbidden paths.** New feature logic. Track analysis bodies.
 
-Contracts consumed. All contracts.
+**Tasks.**
 
-Contracts produced. Final route map and promotion guide.
+1. Point `/dashboard` at playground shell.
+2. Delete canvas and old dashboard modules.
+3. Run full pins, `tsc`, `lint`, `build`, `npm test`.
+4. Confirm import boundaries (cruiser or eslint) if enabled.
 
-Tasks in order:
+**Acceptance.** Both routes work. Monolith gone. No `any` in touched paths. Freeze still improved vs baseline.
 
-1. Point `/dashboard` at the new viewer plus playground store.
-2. Point `/dashboard/lap-comparison` at the new comparison feature.
-3. Delete `dashboard-canvas.tsx` and old `dashboard/*` after routes pass.
-4. Run full build, type check, tests, lint, import boundary check, and section 7 benchmarks.
-5. Write the one page promotion guide. Playground to app steps only.
+**Rollback.** Revert U09. Reintroduce canvas from git only as emergency.
 
-Tests. Full suite. Route smoke tests. Contract pin comparison.
-
-Acceptance criteria. Build passes. Type check passes. Tests pass. No `any` in `src`. No what comments. No inline data in logic. Old monolith gone. Bundle size and `tsc` time recorded.
-
-Rollback. Restore deleted files from git. Repoint routes to prior imports. One revert commit.
-
-### Dependency table. Who can run together
+### Dependency table (for later batching)
 
 | Unit | Depends on | Can run in parallel with |
 |---|---|---|
-| U01 | None | None. Runs first. |
-| U02 | U01 | U03 if both code against U01 contracts only. |
-| U03 | U01 | U02 for the same reason. |
-| U04 | U01, U02, U03 | U05, U07 planning and tests. Not implementation. |
-| U05 | U01, U02 | U03, U04 implementation on separate paths. |
-| U06 | U01, U02, U03, U04 | U05, U08 planning. Not implementation. |
-| U07 | U01, U06 | U08 on separate paths. |
-| U08 | U04, U05, U06 | U07 on separate paths. |
-| U09 | U04, U05, U06, U07, U08 | None. Runs last. |
+| U01 | — | — (first) |
+| U02 | U01 | U03 |
+| U03 | U01 | U02 |
+| U04 | U01, U02, U03 | Nothing that edits viewer or depends on finished viewer props |
+| U05 | U01, U02, U04 | U06 only after U04 has landed and viewer contracts are stable |
+| U06 | U01, U02, U03, U04 | U05 only after U04 has landed. Paths are disjoint but both need finished viewer |
+| U07 | U01, U06 | U08 on disjoint paths |
+| U08 | U04, U05, U06 | U07 |
+| U09 | U04–U08 | — (last) |
 
-Parallel work must code against U01 contracts, not against other units in flight. If a contract needs a change, update U01 first then resume.
+Parallel units must code against U01 contracts, not each other's unreleased files. Contract changes go through U01 first.
 
-## 7. Measurements to take, only those that guard a decision
+---
 
-- `npx tsc --noEmit --extendedDiagnostics` before U01 and after U01 and after U09. Guards the freeze fix. Record program files, type count, check time.
-- `npx tsc --noEmit --generateTrace traceDir` before and after U01. Guards which files own check time. Confirm `spa.ts`, `catalog.ts`, and `dashboard-canvas.tsx` drop out.
-- `npx tsc --noEmit --listFiles` filtered for `.next`. Guards the include fix.
-- Editor autocomplete timing on `store.tsx`. Manual probe before and after U01. Guards the 100 second claim.
-- `npm run build` time and route prerender output for `/dashboard` and `/dashboard/lap-comparison` after U04, U06, U09. Guards that splits did not break routes.
-- Analysis benchmark. Build `LapMetrics` for all 25 tracks and record milliseconds after U02. Guards whether memoization or workers are needed. Default is defer unless one track exceeds 200 ms on a laptop.
-- Bundle check. `next build` output size for both routes after U06 and U09. Guards lazy loading. Defer virtualization and code splitting beyond route level unless telemetry JSON pushes a route past budget.
-- Scrubber frame check after U07. Manual scrub on spa fixture. Guards animation keep or cut. No profiling harness beyond this unless jank is visible.
+## 7. Measurements to take (only those that guard a decision)
 
-Deferred by default. Typed arrays beyond existing `Float64Array` use. Memoization beyond selectors. Web workers. Virtualization. Lazy loading beyond track geometry. Each needs a number from the list above before it earns a place.
+| Measurement | When | Guards |
+|---|---|---|
+| `tsc --extendedDiagnostics --incremental false` (files, types, parse, check, memory, total) | Before/after U01, after U09 | Freeze fix |
+| `tsc --generateTrace` + `analyze-trace` hot spots | Before/after U01 | Confirms geometry and canvas drop |
+| `tsc --listFilesOnly` filtered for `.next` | After U01 | Include scope |
+| Manual autocomplete timing on playground store | After U05 (not U01) | Residual canvas-import freeze |
+| `npx tsx scripts/pin-dashboard-contract.mts` vs baseline | Every unit | Behavior drift |
+| `buildLapMetrics` over 25 tracks (ms) | After U02 | Whether memo/workers earn a place. Defer unless one track > 200 ms on a laptop |
+| `next build` route sizes for both dashboards | After U06, U09 | Whether more code-splitting is needed |
+| Scrubber jank check | After U07 if built | Keep or cut animation |
+
+Deferred by default. Extra typed arrays, workers, virtualization, broader memoization. Each needs a number above before it ships.
+
+---
 
 ## 8. Risks, open questions, and assumptions
 
-Risks:
+### Risks
 
-- The 3697 line canvas hides behavior with no tests. Characterization pins in U01 reduce the risk. Keep the old file until U09.
-- `lap-metrics.ts:525` physics constants have no cited source. Values like `V_MAX=94.5` and brake 32 may encode real tuning. Pins plus fixtures preserve them. Do not retune physics in this refactor.
-- Real telemetry covers 3 of 25 tracks. The other 22 use physics plus mistake windows. Keep the fallback explicit in the contract. Do not hide missing data.
-- TUMFTM geometry is LGPL-3.0. Moving rows to JSON keeps the license header requirement. Keep attribution in each JSON file and in `scripts/build-tracks.mjs:1`.
-- `three` leaks into analysis through `smooth.ts`. Removal needs a local spline with tolerance tests. Risk is visual drift. Pin resample outputs first.
+- Canvas behavior is under-tested. Pins reduce risk. Keep the file until U09.
+- Physics constants in `lap-metrics.ts` (`V_MAX = 94.5`, brake 32, etc.) have no cited source. Preserve via pins. Do not retune during refactor.
+- Only 3 of 25 tracks have real telemetry. Fallback must stay explicit.
+- TUMFTM data is LGPL-3.0. Keep attribution in JSON and `build-tracks.mjs`.
+- Removing `three` from resample can drift geometry. Pin resample outputs first.
+- Dual icon packages inflate LS parse. Secondary. Fix after geometry move if freeze remains.
 
-Open questions:
+### Open questions
 
-- Which unused components will actually return. `track-view-app.tsx`, `track-canvas.tsx`, `telemetry-dock.tsx`, and `timeline-scrubber.tsx` are kept but isolated. The plan does not rebuild them until a feature needs them. Is isolation enough or should they move out of `src` entirely.
-- Chart standard. `telemetry-chart.tsx:419` pulls ECharts for one chart. Should lap comparison stay on ECharts or move to a lighter chart behind the new contract.
-- Playback scope. Lap comparison starts with `car1Visible:false` in `page.tsx:12`. Does the first real version need full playback or only static delta. U07 waits on this answer.
-- `interrogate` review was single model only in this session. A second pass with diverse models should cross examine this plan before U01 starts.
+- First lap-comparison ship. Static map only, or A-vs-B delta + playback. U07 stays optional until answered.
+- Keep ECharts or wrap a lighter chart. Defer until a second chart appears (principle 9).
+- Should legacy keepers be deleted, excluded from `tsconfig`, or moved out of `src`. A move alone does not shrink the language-service program.
+- One icon library. Prefer Tabler (already in chrome) and drop lucide from select when convenient.
 
-Assumptions:
+### Assumptions
 
-- I read every file under `/dashboard` and `/dashboard/lap-comparison` and one level of imports. I sampled track geometry files by head plus `catalog.ts` in full. I did not read every one of the 25 geometry files line by line. Line counts and shapes come from measured sizes plus `build-tracks.mjs`.
-- `scripts/fetch-f1-telemetry.py` and `scripts/tumftm` were listed but not fully read. Telemetry JSON shape comes from `real-telemetry.ts` and the three JSON files.
-- `decisions.tsv:1` shows prior work scoped this as a medium high rigor refactor with a blocks preview route. That route was not present in this tree. I assume it was removed or uncommitted.
-- Git history has 5 commits. `why` evidence is thin. Intent after `b9f2b1b` is inferred from code shape and comments, not from tickets or docs.
-- No behavior tests exist today. U01 creates the first pins. Later units assume those pins hold.
+- I read route files, dashboard modules, catalog, frame, lap-metrics head and structure, ribbon head, real-telemetry, shell/store/scene/panels/types, chrome, shell-client, scripts headers, and measured sizes. I did not line-read all 25 geometry files. Their shape matches `spa.ts` and `build-tracks.mjs`.
+- `fetch-f1-telemetry.py` was not fully read. JSON shape comes from `real-telemetry.ts` and the three JSON files.
+- Git history is short. Intent of the monolith is explicit in `b9f2b1b` commit message. Broader product intent is inferred from comments and structure.
+- No unit test runner is configured today. U01 adds pins and a test script. Later units assume Vitest or the repo's chosen runner.
+
+### Interrogate notes (folded)
+
+Cross-checks that changed this plan.
+
+1. **Ownership bug fixed.** Prior draft let U02 and U03 both own `colormaps.ts`. Now U01 owns data move. U03 owns sampler only.
+2. **`catalog.ts` ownership fixed.** Prior draft rewrote catalog in U01 tasks without listing it under owned paths. It is owned by U01 now.
+3. **Route fact fixed.** `/dashboard` imports `DashboardCanvas` directly, not via shell.
+4. **Freeze mechanism corrected.** Primary is eager geometry parse plus canvas check cost. Unused `CatalogTrack` is not the smoking gun. Icon `.d.ts` files are tertiary.
+5. **Session language softened.** Session is aspirational, not present.
+6. **Zod deferred** unless U01 lands multiple schemas.
+7. **U07 marked optional** so the plan does not force playback before product need.
+8. **Over-engineering pushback.** Rejected `shared/` mega-tree and early state libraries. Feature folders exist only for real ownership.
+9. **U01 build break fixed.** Prefer delete literal modules. Optional thin `spa.ts` re-export only for legacy. Literal bodies must not remain.
+10. **U01 size risk noted.** Large session. Prefer two commits inside one unit rather than splitting ownership.
+11. **U01 acceptance narrowed.** Editor freeze on `store.tsx` moves to U05. U01 proves freeze reduction via `tsc` metrics and lazy-catalog invariant.
+12. **`real-telemetry.ts` now owned by U01.**
+13. **Test runner lands in U01.** Later units have an executable `npm test`.
+14. **Lazy catalog invariant made explicit.** Static import of all geometry fails U01.
+15. **Dependency table corrected.** U05/U06 do not run beside unfinished U04.
+16. **U04 gains digest parity** before U05 depends on viewer.
+17. **Grok interrogate ([2d1425b2](2d1425b2-05ce-4418-8926-ca70ba9235c3)).** U01 must keep `TRACKS` / `RACE_LINES` / `trackTelemetry` so forbidden callers still typecheck. JSON must be wide-typed through `parseTrack` or the literal-union freeze returns. Do not move palettes or section fixtures in U01. No nominal brands on meter fields in U01. U02 keeps `lapMetrics` / `resolveSectionMap` aliases. U04 extracts along the export block instead of a blind rebuild. U05 may import track contracts. U06/U07 split `shell.tsx` ownership. U08 must exclude or delete legacy from `tsconfig`. Softened the 100s claim vs ~11s cold `tsc`.
+
+---
+
+*End of plan. Group these units into batches later without rereading the tree. Use the dependency table.*

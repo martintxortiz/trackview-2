@@ -5,25 +5,31 @@
  * An Assetto Corsa extract only has to land in this frame; the view stays put.
  */
 
+/** Planar point in meters (+x east, +y north). */
 export type Xy = readonly [number, number]
 
 export type TrackSample = {
+  /** Meters east of track origin. */
   readonly x: number
+  /** Meters north of track origin. */
   readonly y: number
-  /** Meters from the reference line to each edge, along the driving direction. */
+  /** Meters from the reference line to the left edge, along driving direction. */
   readonly left: number
+  /** Meters from the reference line to the right edge, along driving direction. */
   readonly right: number
 }
 
 export type Track = {
   readonly id: string
   readonly name: string
-  /** Closed ring. The first sample is not repeated at the end. */
+  /** Closed ring in meters. The first sample is not repeated at the end. */
   readonly samples: readonly TrackSample[]
 }
 
 export type Pose = {
+  /** Meters east of track origin. */
   readonly x: number
+  /** Meters north of track origin. */
   readonly y: number
   /** Radians from +x toward +y. */
   readonly heading: number

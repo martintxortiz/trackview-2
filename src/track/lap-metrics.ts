@@ -1,22 +1,46 @@
 /**
  * Lap channels for heatmaps.
- * Prefer real FastF1 car data when we have it for the track; otherwise a
- * curvature-limited point-mass estimate from the centerline.
+ * Prefer real FastF1 car data when present; otherwise a curvature-limited
+ * point-mass estimate from the centerline.
  */
 import type { Track } from '@/track/frame'
-import { trackTelemetry } from '@/track/real-telemetry'
+import type { LapMetrics, MetricId, TelemetryTrace } from '@/track/domain'
+import { loadTelemetry } from '@/track/real-telemetry'
 import { resampleTrack } from '@/track/smooth'
 
-/** Dense equal-arc sampling (m) for curvature / envelope integration. */
-const METRIC_SPACING = 1
+export type { LapMetrics, MetricId }
 
-export type MetricId =
-  | 'speed'
-  | 'brake'
-  | 'throttle'
-  | 'pedals'
-  | 'battery'
-  | 'tyres'
+/** Dense equal-arc sampling (m) for curvature / envelope integration. */
+const METRIC_SPACING_M = 1
+
+/**
+ * Lateral grip with downforce: a_lat = A0 + B·v² (m/s²).
+ * Corner limit: v² = A0 / (κ − B) when κ > B.
+ */
+/** Base lateral accel at v=0 (m/s²). */
+const A_LAT0_M_S2 = 16
+/** Downforce gain on lateral grip (1/m) — term B in a_lat = A0 + B·v². */
+const A_LAT_DF_PER_M = 0.0058
+/** Longitudinal accel limit (m/s²). */
+const A_ACCEL_M_S2 = 11
+/** Longitudinal brake limit (m/s²). */
+const A_BRAKE_M_S2 = 32
+/** Soft top speed (m/s) ≈ 340 km/h. */
+const V_MAX_M_S = 94.5
+/** Curvature floor so denom never vanishes (1/m). */
+const KAPPA_EPS_PER_M = 1e-5
+/** Ignore tiny long-g so mid-corner noise stays coast (m/s²). */
+const COAST_BAND_M_S2 = 2.4
+/** κ smooth window (samples @ 1 m). */
+const KAPPA_WIN = 8
+/** Longitudinal accel smooth window (samples). */
+const ACCEL_WIN = 5
+/** Pedal / ERS / tyre temporal smooth (samples). */
+const OUT_WIN = 4
+/** κ scale for "straightness" 0…1 (1/m). */
+const STRAIGHT_KAPPA_PER_M = 0.012
+/** Gravity for tyre-load g's (m/s²). */
+const G_M_S2 = 9.81
 
 export const METRICS: { id: MetricId; name: string }[] = [
   { id: 'speed', name: 'Speed' },
@@ -32,47 +56,6 @@ export const METRICS: { id: MetricId; name: string }[] = [
  * Real F1 laps barely coast — Mistakes injects deliberate coast + errors.
  */
 export type MetricsSourceId = 'auto' | 'physics' | 'mistakes'
-
-export type LapMetrics = {
-  /** m/s */
-  speed: Float64Array
-  /** 0–1 brake pressure */
-  brake: Float64Array
-  /** 0–1 throttle */
-  throttle: Float64Array
-  /** −1 brake … 0 coast … +1 throttle */
-  pedals: Float64Array
-  /** −1 harvest … 0 idle … +1 ERS deploy */
-  battery: Float64Array
-  /** Surface temp proxy °C */
-  tyres: Float64Array
-}
-
-/**
- * Lateral grip with downforce: a_lat = A0 + B·v².
- * Corner limit: v² = A0 / (κ − B) when κ > B — so Eau Rouge–class bends
- * stay flat-out while hairpins still force a real brake zone.
- */
-const A_LAT0 = 16
-const A_LAT_DF = 0.0058
-const A_ACCEL = 11
-const A_BRAKE = 32
-/** Soft top speed (m/s) ≈ 340 km/h. */
-const V_MAX = 94.5
-const KAPPA_EPS = 1e-5
-/** Ignore tiny long-g so mid-corner noise stays coast, not brake. */
-const COAST_BAND = 2.4
-/** κ smooth window (samples @ 1 m). */
-const KAPPA_WIN = 8
-/** Longitudinal accel smooth window. */
-const ACCEL_WIN = 5
-/** Pedal / ERS / tyre temporal smooth. */
-const OUT_WIN = 4
-
-function cornerSpeedLimit(kappa: number): number {
-  const denom = Math.max(kappa - A_LAT_DF, KAPPA_EPS)
-  return Math.min(V_MAX, Math.sqrt(A_LAT0 / denom))
-}
 
 const cache = new WeakMap<Track, Map<MetricsSourceId, LapMetrics>>()
 
@@ -131,11 +114,79 @@ function emptyMetrics(n: number): LapMetrics {
   }
 }
 
+function cornerSpeedLimit(kappa: number): number {
+  const denom = Math.max(kappa - A_LAT_DF_PER_M, KAPPA_EPS_PER_M)
+  return Math.min(V_MAX_M_S, Math.sqrt(A_LAT0_M_S2 / denom))
+}
+
+/** Straightness 0…1 from absolute curvature. */
+function straightness(kappaAbs: number): number {
+  return Math.min(1, Math.max(0, 1 - kappaAbs / STRAIGHT_KAPPA_PER_M))
+}
+
+/** ERS channel: deploy on throttle+straight, harvest under brake (−1…+1). */
+function batteryFromPedals(throttle: number, brake: number, straight: number): number {
+  return throttle * (0.35 + 0.65 * straight) - brake
+}
+
+/** Tyre surface temp proxy (°C) from load + throttle. */
+function tyreTempC(
+  v: number,
+  kappaAbs: number,
+  longAccelAbs: number,
+  throttle: number,
+  brakeExtra = 0,
+): number {
+  const latG = (v * v * kappaAbs) / G_M_S2
+  const longG = longAccelAbs / G_M_S2
+  const load = Math.min(1, latG / 4.2 + longG / 3.5 + brakeExtra)
+  return 78 + load * 38 + throttle * 4
+}
+
+/** Keep brake XOR throttle after smoothing; write pedals = t − b. */
+function finalizeExclusivePedals(
+  brake: Float64Array,
+  throttle: Float64Array,
+  pedals: Float64Array,
+  exclusiveThresh = 0.08,
+): void {
+  const n = brake.length
+  for (let i = 0; i < n; i++) {
+    const b = Math.min(1, Math.max(0, brake[i]!))
+    const t = Math.min(1, Math.max(0, throttle[i]!))
+    if (b > exclusiveThresh && t > exclusiveThresh) {
+      if (b >= t) {
+        brake[i] = b
+        throttle[i] = 0
+      } else {
+        throttle[i] = t
+        brake[i] = 0
+      }
+    } else {
+      brake[i] = b
+      throttle[i] = t
+    }
+    pedals[i] = throttle[i]! - brake[i]!
+  }
+}
+
+function absKappaSmooth(track: Track): Float64Array {
+  const dense = resampleTrack(track, METRIC_SPACING_M)
+  const { kappa } = curvature(dense)
+  return boxSmooth(
+    Float64Array.from(kappa, (k) => Math.abs(k)),
+    KAPPA_WIN,
+  )
+}
+
 /** Real FastF1 lap → metric channels (speed m/s, pedals 0–1). */
 function metricsFromReal(track: Track): LapMetrics | null {
-  const pack = trackTelemetry(track.id)
-  if (!pack) return null
-  const tr = pack.a
+  const pack = loadTelemetry(track.id)
+  if (!pack.ok) return null
+  return metricsFromTrace(track, pack.value.a)
+}
+
+function metricsFromTrace(track: Track, tr: TelemetryTrace): LapMetrics | null {
   const n = tr.speed_kmh.length
   if (n < 3) return null
 
@@ -146,13 +197,7 @@ function metricsFromReal(track: Track): LapMetrics | null {
   const battery = new Float64Array(n)
   const tyreRaw = new Float64Array(n)
 
-  // Geometry only for tyre / ERS proxies — pedals come from the car.
-  const dense = resampleTrack(track, METRIC_SPACING)
-  const { kappa } = curvature(dense)
-  const kappaAbs = boxSmooth(
-    Float64Array.from(kappa, (k) => Math.abs(k)),
-    KAPPA_WIN,
-  )
+  const kappaAbs = absKappaSmooth(track)
   const kn = kappaAbs.length || 1
 
   for (let i = 0; i < n; i++) {
@@ -171,16 +216,13 @@ function metricsFromReal(track: Track): LapMetrics | null {
     pedals[i] = t - b
 
     const k = kappaAbs[Math.floor((i / n) * kn) % kn]!
-    const straight = Math.min(1, Math.max(0, 1 - k / 0.012))
-    battery[i] = t * (0.35 + 0.65 * straight) - b
+    const straight = straightness(k)
+    battery[i] = batteryFromPedals(t, b, straight)
 
     const prev = tr.speed_kmh[Math.max(0, i - 1)]!
     const next = tr.speed_kmh[Math.min(n - 1, i + 1)]!
     const aApprox = ((next - prev) / 3.6) * (vKmh / 3.6) * 0.02
-    const latG = (v * v * k) / 9.81
-    const longG = Math.abs(aApprox) / 9.81
-    const load = Math.min(1, latG / 4.2 + longG / 3.5 + b * 0.35)
-    tyreRaw[i] = 78 + load * 38 + t * 4
+    tyreRaw[i] = tyreTempC(v, k, Math.abs(aApprox), t, b * 0.35)
   }
 
   const tyres = boxSmooth(tyreRaw, OUT_WIN + 2)
@@ -190,10 +232,6 @@ function metricsFromReal(track: Track): LapMetrics | null {
   }
 
   return { speed, brake, throttle, pedals, battery, tyres }
-}
-
-function buildMetrics(track: Track): LapMetrics {
-  return metricsFromReal(track) ?? buildPhysics(track)
 }
 
 function cloneMetrics(m: LapMetrics): LapMetrics {
@@ -215,7 +253,7 @@ function stampPedals(
   brake: number,
   throttle: number,
   speedScale = 1,
-) {
+): void {
   const n = m.speed.length
   if (n < 2) return
   const u0 = ((from % 1) + 1) % 1
@@ -238,17 +276,11 @@ function stampPedals(
  */
 function withMistakes(base: LapMetrics): LapMetrics {
   const m = cloneMetrics(base)
-  // Coast on a straight — should be full throttle.
   stampPedals(m, 0.04, 0.1, 0, 0, 0.97)
-  // Early brake into a zone that was still accelerating.
   stampPedals(m, 0.2, 0.26, 0.85, 0, 0.92)
-  // Mid-corner coast (lift) instead of holding throttle.
   stampPedals(m, 0.38, 0.44, 0, 0, 0.95)
-  // Late / soft throttle on exit.
   stampPedals(m, 0.55, 0.62, 0, 0.35)
-  // Long coast before a brake zone (lift-and-coast).
   stampPedals(m, 0.72, 0.8, 0, 0, 0.96)
-  // Trail-brake then full coast (neither pedal).
   stampPedals(m, 0.88, 0.93, 0.4, 0, 0.94)
   stampPedals(m, 0.93, 0.97, 0, 0, 0.97)
   return m
@@ -256,7 +288,7 @@ function withMistakes(base: LapMetrics): LapMetrics {
 
 /** Curvature-limited point-mass lap — used when FastF1 is missing or forced. */
 function buildPhysics(track: Track): LapMetrics {
-  const dense = resampleTrack(track, METRIC_SPACING)
+  const dense = resampleTrack(track, METRIC_SPACING_M)
   const n = dense.samples.length
   if (n < 3) return emptyMetrics(n)
 
@@ -266,32 +298,27 @@ function buildPhysics(track: Track): LapMetrics {
     KAPPA_WIN,
   )
 
-  // Local apex limit only — the backward pass places real brake points.
-  // (Look-ahead min was wrongly scrubbing for Eau Rouge on the pit straight.)
   const vLimit = new Float64Array(n)
   for (let i = 0; i < n; i++) {
     vLimit[i] = cornerSpeedLimit(kappaAbs[i]!)
   }
 
   const speed = new Float64Array(n)
-
-  // Forward: acceleration-limited
-  speed[0] = Math.min(vLimit[0]!, V_MAX * 0.7)
+  speed[0] = Math.min(vLimit[0]!, V_MAX_M_S * 0.7)
   for (let pass = 0; pass < 2; pass++) {
     for (let i = 0; i < n; i++) {
       const i1 = (i + 1) % n
       const d = ds[i]!
-      const next = Math.sqrt(speed[i]! * speed[i]! + 2 * A_ACCEL * d)
+      const next = Math.sqrt(speed[i]! * speed[i]! + 2 * A_ACCEL_M_S2 * d)
       speed[i1] = Math.min(vLimit[i1]!, next)
     }
   }
 
-  // Backward: braking-limited into slow corners only
   for (let pass = 0; pass < 2; pass++) {
     for (let i = n - 1; i >= 0; i--) {
       const i0 = (i + n - 1) % n
       const d = ds[i0]!
-      const prev = Math.sqrt(speed[i]! * speed[i]! + 2 * A_BRAKE * d)
+      const prev = Math.sqrt(speed[i]! * speed[i]! + 2 * A_BRAKE_M_S2 * d)
       speed[i0] = Math.min(speed[i0]!, vLimit[i0]!, prev)
     }
   }
@@ -314,36 +341,30 @@ function buildPhysics(track: Track): LapMetrics {
     const a = aSmooth[i]!
     const v = speed[i]!
     const k = kappaAbs[i]!
-    // Straightness: 0 in a hairpin, 1 on a straight.
-    const straight = Math.min(1, Math.max(0, 1 - k / 0.012))
+    const straight = straightness(k)
 
-    // Exclusive pedals — brake OR throttle, intensity = how hard.
-    if (a < -COAST_BAND) {
-      brakeRaw[i] = Math.min(1, (-a - COAST_BAND) / (A_BRAKE - COAST_BAND))
+    if (a < -COAST_BAND_M_S2) {
+      brakeRaw[i] = Math.min(
+        1,
+        (-a - COAST_BAND_M_S2) / (A_BRAKE_M_S2 - COAST_BAND_M_S2),
+      )
       throttleRaw[i] = 0
-    } else if (a > COAST_BAND) {
-      throttleRaw[i] = Math.min(1, (a - COAST_BAND) / (A_ACCEL - COAST_BAND))
+    } else if (a > COAST_BAND_M_S2) {
+      throttleRaw[i] = Math.min(
+        1,
+        (a - COAST_BAND_M_S2) / (A_ACCEL_M_S2 - COAST_BAND_M_S2),
+      )
       brakeRaw[i] = 0
-    } else if (straight > 0.45 || v > V_MAX * 0.82) {
-      // Flat / high-speed bends: full throttle (Eau Rouge, Kemmel, etc.).
+    } else if (straight > 0.45 || v > V_MAX_M_S * 0.82) {
       throttleRaw[i] = 1
       brakeRaw[i] = 0
     } else {
-      // Slow corner hold — partial throttle, never a fake brush of brake.
       throttleRaw[i] = Math.min(0.7, 0.35 + 0.45 * straight)
       brakeRaw[i] = 0
     }
 
-    // ERS: harvest under braking, deploy on straight exits (throttle + low κ).
-    const harvest = brakeRaw[i]!
-    const deploy = throttleRaw[i]! * (0.35 + 0.65 * straight)
-    batteryRaw[i] = deploy - harvest
-
-    // Tyre temp proxy: lateral load + long load, base ~82 °C working window.
-    const latG = (v * v * k) / 9.81
-    const longG = Math.abs(a) / 9.81
-    const load = Math.min(1, latG / 4.2 + longG / 3.5)
-    tyreRaw[i] = 78 + load * 38 + throttleRaw[i]! * 4
+    batteryRaw[i] = batteryFromPedals(throttleRaw[i]!, brakeRaw[i]!, straight)
+    tyreRaw[i] = tyreTempC(v, k, Math.abs(a), throttleRaw[i]!)
   }
 
   const brake = boxSmooth(brakeRaw, OUT_WIN)
@@ -351,33 +372,25 @@ function buildPhysics(track: Track): LapMetrics {
   const battery = boxSmooth(batteryRaw, OUT_WIN)
   const tyres = boxSmooth(tyreRaw, OUT_WIN + 2)
   const pedals = new Float64Array(n)
+  finalizeExclusivePedals(brake, throttle, pedals)
   for (let i = 0; i < n; i++) {
-    // Re-clamp after smooth; keep exclusive-ish.
-    const b = Math.min(1, Math.max(0, brake[i]!))
-    const t = Math.min(1, Math.max(0, throttle[i]!))
-    if (b > 0.08 && t > 0.08) {
-      if (b >= t) {
-        brake[i] = b
-        throttle[i] = 0
-      } else {
-        throttle[i] = t
-        brake[i] = 0
-      }
-    } else {
-      brake[i] = b
-      throttle[i] = t
-    }
-    pedals[i] = throttle[i]! - brake[i]!
     battery[i] = Math.min(1, Math.max(-1, battery[i]!))
   }
 
   return { speed, brake, throttle, pedals, battery, tyres }
 }
 
-function buildForSource(track: Track, source: MetricsSourceId): LapMetrics {
+/**
+ * Pure builder for lap metric channels.
+ * Prefer this in new code; `lapMetrics` is the cached compat entry point.
+ */
+export function buildLapMetrics(
+  track: Track,
+  source: MetricsSourceId = 'auto',
+): LapMetrics {
   switch (source) {
     case 'auto':
-      return buildMetrics(track)
+      return metricsFromReal(track) ?? buildPhysics(track)
     case 'physics':
       return buildPhysics(track)
     case 'mistakes': {
@@ -391,6 +404,7 @@ function buildForSource(track: Track, source: MetricsSourceId): LapMetrics {
   }
 }
 
+/** Cached lap metrics — same signature frozen callers expect. */
 export function lapMetrics(
   track: Track,
   source: MetricsSourceId = 'auto',
@@ -402,7 +416,7 @@ export function lapMetrics(
   }
   const hit = bySource.get(source)
   if (hit) return hit
-  const built = buildForSource(track, source)
+  const built = buildLapMetrics(track, source)
   bySource.set(source, built)
   return built
 }
@@ -444,7 +458,6 @@ export function metricDisplayRange(
   const r = metricRange(series)
   switch (id) {
     case 'pedals':
-      // Fixed so coast sits in the middle: red ← dim → green.
       return { min: -1, max: 1 }
     case 'battery': {
       const m = Math.max(Math.abs(r.min), Math.abs(r.max), 0.35)
@@ -494,7 +507,9 @@ export function formatMetricValue(id: MetricId, value: number): string {
       return `${Math.round(value * 100)}`
     case 'pedals':
     case 'battery':
-      return value >= 0 ? `+${Math.round(value * 100)}` : `${Math.round(value * 100)}`
+      return value >= 0
+        ? `+${Math.round(value * 100)}`
+        : `${Math.round(value * 100)}`
     case 'tyres':
       return `${Math.round(value)}`
     default: {

@@ -1,7 +1,12 @@
+/**
+ * Planar ribbon / stroke geometry for track paint.
+ * Caches: `sidesOf` keeps one mitered edge pair per `Track` identity (WeakMap).
+ */
 import { toScene, type Track, type Xy } from '@/track/frame'
 
 type Pt = readonly [number, number]
 
+/** Cap miter length vs half-width (dimensionless). */
 const MITER_LIMIT = 4
 
 /** Unit tangent at sample i (closed ring). */
@@ -47,7 +52,6 @@ export function offsetPolyline(
     tx1 /= l1
     ty1 /= l1
 
-    // Left normals of incoming / outgoing segments.
     const nx0 = -ty0
     const ny0 = tx0
     const nx1 = -ty1
@@ -57,13 +61,11 @@ export function offsetPolyline(
     let my = ny0 + ny1
     const mLen = Math.hypot(mx, my)
     if (mLen < 1e-8) {
-      // 180° fold — fall back to segment normal.
       out[i] = [p[0] + nx0 * dist, p[1] + ny0 * dist]
       continue
     }
     mx /= mLen
     my /= mLen
-    // Scale so projected offset along either normal equals |dist|.
     const cos = Math.max(mx * nx0 + my * ny0, 1 / MITER_LIMIT)
     const scale = dist / cos
     out[i] = [p[0] + mx * scale, p[1] + my * scale]
@@ -73,7 +75,8 @@ export function offsetPolyline(
 }
 
 /** Left/right edges of a closed track, mitered for sharp corners. */
-export function trackSides(track: Track): { left: Pt[]; right: Pt[] } {  const samples = track.samples
+export function trackSides(track: Track): { left: Pt[]; right: Pt[] } {
+  const samples = track.samples
   const n = samples.length
   const left: Pt[] = new Array(n)
   const right: Pt[] = new Array(n)
@@ -84,7 +87,6 @@ export function trackSides(track: Track): { left: Pt[]; right: Pt[] } {  const s
     const nx = -ty
     const ny = tx
 
-    // Miter from adjacent segment normals (same as offsetPolyline).
     const prev = samples[(i + n - 1) % n]!
     const next = samples[(i + 1) % n]!
     let tx0 = point.x - prev.x
@@ -112,7 +114,10 @@ export function trackSides(track: Track): { left: Pt[]; right: Pt[] } {  const s
     mx /= mLen
     my /= mLen
     const cos = Math.max(mx * nx0 + my * ny0, 1 / MITER_LIMIT)
-    left[i] = [point.x + (mx * point.left) / cos, point.y + (my * point.left) / cos]
+    left[i] = [
+      point.x + (mx * point.left) / cos,
+      point.y + (my * point.left) / cos,
+    ]
     right[i] = [
       point.x - (mx * point.right) / cos,
       point.y - (my * point.right) / cos,
@@ -124,12 +129,12 @@ export function trackSides(track: Track): { left: Pt[]; right: Pt[] } {  const s
 
 export type TrackSides = { left: Pt[]; right: Pt[] }
 
+/**
+ * Cached edges for a track identity. Bound by WeakMap: entries drop when the
+ * `Track` object is GC'd. Paint, strokes, and hover share one miter pass.
+ */
 const sidesCache = new WeakMap<Track, TrackSides>()
 
-/**
- * Cached edges for a track identity. Paint, strokes and hover share one
- * miter pass instead of recomputing it per consumer and per pointer move.
- */
 export function sidesOf(track: Track): TrackSides {
   const hit = sidesCache.get(track)
   if (hit) return hit
@@ -207,21 +212,6 @@ export function ribbonHeatmap(
   return { positions, colors, channels }
 }
 
-/** Closed scene-space loops, lifted just above the asphalt. */
-export function edgeLoops(track: Track): {
-  left: [number, number, number][]
-  right: [number, number, number][]
-} {
-  const { left, right } = sidesOf(track)
-  const loop = (points: Pt[]) => {
-    const scene = points.map(([x, y]) => toScene(x, y, 0.05))
-    const first = scene[0]
-    if (first) scene.push([first[0], first[1], first[2]])
-    return scene
-  }
-  return { left: loop(left), right: loop(right) }
-}
-
 function strokeRibbon(
   points: readonly Xy[],
   halfWidth: number,
@@ -297,7 +287,14 @@ export function strokeHeatmap(
   closed = true,
   channels: 3 | 4 = 3,
 ): { positions: Float32Array; colors: Float32Array; channels: 3 | 4 } {
-  const painted = strokeRibbon(points, halfWidth, up, closed, colorPerSample, channels)
+  const painted = strokeRibbon(
+    points,
+    halfWidth,
+    up,
+    closed,
+    colorPerSample,
+    channels,
+  )
   return {
     positions: painted.positions,
     colors: painted.colors ?? new Float32Array(0),
@@ -325,7 +322,11 @@ export function edgeAt(points: readonly Pt[], t: number): Pt {
  * Open asphalt ribbon for arc-length fraction `[t0, t1]` going forward
  * around the closed ring (`t1` may be 1 = lap end / start).
  */
-export function ribbonArcPositions(track: Track, t0: number, t1: number): Float32Array {
+export function ribbonArcPositions(
+  track: Track,
+  t0: number,
+  t1: number,
+): Float32Array {
   const { left, right } = sidesOf(track)
   const n = left.length
   if (n < 2) return new Float32Array(0)
@@ -404,9 +405,8 @@ export function segmentPositions(
  * Checkered start/finish stripe across `a` → `b`, `halfWidth` meters to each
  * side along the track. `cols` cells span the track width, `rows` span the
  * driving direction — 8×2 keeps the classic look without going thick.
- * White squares are 1,1,1 and dark squares 0,0,0 (both exact in sRGB and
- * linear, so no ColorManagement shift). Same winding-agnostic layout as
- * segmentPositions (material is DoubleSide).
+ * White squares are 1,1,1 and dark squares 0,0,0. Same winding-agnostic
+ * layout as segmentPositions (material is DoubleSide).
  */
 export function checkeredSegmentPositions(
   a: Xy,

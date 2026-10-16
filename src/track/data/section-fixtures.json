@@ -1,0 +1,58 @@
+{
+  "sectors": [
+    { "id": "s1", "name": "Sector 1", "from": 0, "to": 0.3333333333333333, "color": "#d84b42" },
+    { "id": "s2", "name": "Sector 2", "from": 0.3333333333333333, "to": 0.6666666666666666, "color": "#35a05c" },
+    { "id": "s3", "name": "Sector 3", "from": 0.6666666666666666, "to": 1, "color": "#3d8bdd" }
+  ],
+  "battery-race": [
+    { "id": "r0", "name": "Deploy", "from": 0.0, "to": 0.06, "color": "#35a05c" },
+    { "id": "r1", "name": "Idle", "from": 0.06, "to": 0.1, "color": "#6e6e78" },
+    { "id": "r2", "name": "Harvest", "from": 0.1, "to": 0.16, "color": "#3d8bdd" },
+    { "id": "r3", "name": "Deploy", "from": 0.16, "to": 0.28, "color": "#35a05c" },
+    { "id": "r4", "name": "Idle", "from": 0.28, "to": 0.34, "color": "#6e6e78" },
+    { "id": "r5", "name": "Harvest", "from": 0.34, "to": 0.42, "color": "#3d8bdd" },
+    { "id": "r6", "name": "Deploy", "from": 0.42, "to": 0.55, "color": "#35a05c" },
+    { "id": "r7", "name": "Idle", "from": 0.55, "to": 0.62, "color": "#6e6e78" },
+    { "id": "r8", "name": "Harvest", "from": 0.62, "to": 0.72, "color": "#3d8bdd" },
+    { "id": "r9", "name": "Deploy", "from": 0.72, "to": 0.88, "color": "#35a05c" },
+    { "id": "r10", "name": "Idle", "from": 0.88, "to": 0.93, "color": "#6e6e78" },
+    { "id": "r11", "name": "Harvest", "from": 0.93, "to": 1.0, "color": "#3d8bdd" }
+  ],
+  "battery-qualify": [
+    { "id": "q0", "name": "Boost", "from": 0.0, "to": 0.1, "color": "#d9a62e" },
+    { "id": "q1", "name": "Deploy", "from": 0.1, "to": 0.22, "color": "#35a05c" },
+    { "id": "q2", "name": "Harvest", "from": 0.22, "to": 0.28, "color": "#3d8bdd" },
+    { "id": "q3", "name": "Boost", "from": 0.28, "to": 0.4, "color": "#d9a62e" },
+    { "id": "q4", "name": "Deploy", "from": 0.4, "to": 0.55, "color": "#35a05c" },
+    { "id": "q5", "name": "Harvest", "from": 0.55, "to": 0.62, "color": "#3d8bdd" },
+    { "id": "q6", "name": "Boost", "from": 0.62, "to": 0.78, "color": "#d9a62e" },
+    { "id": "q7", "name": "Deploy", "from": 0.78, "to": 0.92, "color": "#35a05c" },
+    { "id": "q8", "name": "Harvest", "from": 0.92, "to": 1.0, "color": "#3d8bdd" }
+  ],
+  "ers-2025": [
+    { "id": "25a", "name": "Deploy", "from": 0.0, "to": 0.08, "color": "#35a05c" },
+    { "id": "25b", "name": "Idle", "from": 0.08, "to": 0.14, "color": "#6e6e78" },
+    { "id": "25c", "name": "Harvest", "from": 0.14, "to": 0.2, "color": "#3d8bdd" },
+    { "id": "25d", "name": "Deploy", "from": 0.2, "to": 0.32, "color": "#35a05c" },
+    { "id": "25e", "name": "Idle", "from": 0.32, "to": 0.4, "color": "#6e6e78" },
+    { "id": "25f", "name": "Harvest", "from": 0.4, "to": 0.48, "color": "#3d8bdd" },
+    { "id": "25g", "name": "Deploy", "from": 0.48, "to": 0.62, "color": "#35a05c" },
+    { "id": "25h", "name": "Idle", "from": 0.62, "to": 0.7, "color": "#6e6e78" },
+    { "id": "25i", "name": "Harvest", "from": 0.7, "to": 0.78, "color": "#3d8bdd" },
+    { "id": "25j", "name": "Deploy", "from": 0.78, "to": 0.9, "color": "#35a05c" },
+    { "id": "25k", "name": "Recharge", "from": 0.9, "to": 1.0, "color": "#2ab5ac" }
+  ],
+  "ers-2026": [
+    { "id": "26a", "name": "Boost", "from": 0.0, "to": 0.12, "color": "#d9a62e" },
+    { "id": "26b", "name": "Deploy", "from": 0.12, "to": 0.2, "color": "#35a05c" },
+    { "id": "26c", "name": "Harvest", "from": 0.2, "to": 0.26, "color": "#3d8bdd" },
+    { "id": "26d", "name": "Boost", "from": 0.26, "to": 0.38, "color": "#d9a62e" },
+    { "id": "26e", "name": "Deploy", "from": 0.38, "to": 0.48, "color": "#35a05c" },
+    { "id": "26f", "name": "Recharge", "from": 0.48, "to": 0.55, "color": "#2ab5ac" },
+    { "id": "26g", "name": "Boost", "from": 0.55, "to": 0.68, "color": "#d9a62e" },
+    { "id": "26h", "name": "Deploy", "from": 0.68, "to": 0.8, "color": "#35a05c" },
+    { "id": "26i", "name": "Harvest", "from": 0.8, "to": 0.86, "color": "#3d8bdd" },
+    { "id": "26j", "name": "Boost", "from": 0.86, "to": 0.96, "color": "#d9a62e" },
+    { "id": "26k", "name": "Recharge", "from": 0.96, "to": 1.0, "color": "#2ab5ac" }
+  ]
+}

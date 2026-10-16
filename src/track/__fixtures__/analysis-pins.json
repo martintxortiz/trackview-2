@@ -1,0 +1,39 @@
+{
+  "spa": {
+    "samples": 1401,
+    "smoothN": 6973,
+    "smoothDigest": "1762da444f416e8e",
+    "speedLen": 500,
+    "speedDigest": "edd7832cd4a29f3e",
+    "pedalsDigest": "e810ab25dc13ef84",
+    "physicsSpeedDigest": "6f35b39343af83ea",
+    "physicsSpeedLen": 6973,
+    "sectorsN": 3,
+    "sectorsDigest": "7831a846daf85ba5",
+    "pedalZonesN": 11,
+    "pedalZonesDigest": "55cc4c32c4ef32a6",
+    "battZonesN": 11,
+    "battZonesDigest": "25f783f7b778c2a8",
+    "speedMin": 21.455555555555552,
+    "speedMax": 94.16666666666667,
+    "formatSpeed0": "249"
+  },
+  "monza": {
+    "samples": 1159,
+    "smoothN": 5777,
+    "speedLen": 500,
+    "speedDigest": "b096ad8813731458",
+    "pedalsDigest": "231c4a2901843925",
+    "physicsSpeedDigest": "b74436744e03f295",
+    "physicsSpeedLen": 5777,
+    "sectorsN": 3,
+    "sectorsDigest": "7831a846daf85ba5",
+    "pedalZonesN": 13,
+    "pedalZonesDigest": "1423caa2d940b82e",
+    "battZonesN": 13,
+    "battZonesDigest": "94ce18eefa98356e",
+    "speedMin": 20.494444444444444,
+    "speedMax": 96.66666666666666,
+    "formatSpeed0": "323"
+  }
+}

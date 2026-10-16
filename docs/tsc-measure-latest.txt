@@ -1,0 +1,29 @@
+src/app/layout.tsx(30,50): error TS2304: Cannot find name 'LayoutProps'.
+Files:                        1346
+Lines of Library:            53142
+Lines of Definitions:       316650
+Lines of TypeScript:         10301
+Lines of JavaScript:             0
+Lines of JSON:                  60
+Lines of Other:                  0
+Identifiers:                450007
+Symbols:                    310424
+Types:                       47101
+Instantiations:             154166
+Memory used:               518055K
+Assignability cache size:    15548
+Identity cache size:           785
+Subtype cache size:            324
+Strict subtype cache size:     377
+I/O Read time:               0.22s
+Parse time:                  1.12s
+ResolveModule time:          0.41s
+ResolveTypeReference time:   0.01s
+ResolveLibrary time:         0.02s
+Program time:                1.95s
+Bind time:                   0.48s
+Check time:                  3.04s
+printTime time:              0.00s
+Emit time:                   0.00s
+Total time:                  5.47s
+npm warn Unknown env config "devdir". This will stop working in the next major version of npm.

@@ -3,9 +3,11 @@
  * Run before/after structural cleanups; stdout must match.
  *
  *   npx tsx scripts/pin-dashboard-contract.mts
+ *
+ * Spa-only load by default so the pin does not force full-catalog eager import.
  */
 import { createHash } from 'node:crypto'
-import { TRACKS } from '../src/track/catalog'
+import { listTrackIds, trackById } from '../src/track/catalog'
 import { boundsOf } from '../src/track/frame'
 import { lapMetrics, seriesFor } from '../src/track/lap-metrics'
 import { resolveSectionMap } from '../src/track/section-maps'
@@ -19,8 +21,8 @@ function digest(parts: unknown[]): string {
   return h.digest('hex').slice(0, 16)
 }
 
-const spa = TRACKS.find((t) => t.id === 'spa')
-if (!spa) throw new Error('spa missing from TRACKS')
+const spa = trackById('spa')
+if (!spa) throw new Error('spa missing from catalog')
 
 const b = boundsOf(spa.samples)
 const smooth = resampleTrack(spa, 1)
@@ -34,7 +36,7 @@ const offset = offsetPolyline(
 )
 
 const pin = {
-  tracks: TRACKS.length,
+  tracks: listTrackIds().length,
   spaSamples: spa.samples.length,
   bounds: {
     cx: round(b.cx),

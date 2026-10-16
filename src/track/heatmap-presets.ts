@@ -1,5 +1,5 @@
 import type { PaletteId } from '@/track/colormaps'
-import type { MetricId } from '@/track/lap-metrics'
+import type { MetricId } from '@/track/domain'
 
 export type HeatmapPresetId =
   | 'speed'

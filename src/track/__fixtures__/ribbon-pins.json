@@ -1,0 +1,18 @@
+{
+  "spa": {
+    "smoothN": 6973,
+    "sidesN": 6973,
+    "sidesDigest": "4710d087113200e9",
+    "offsetDigest": "ecae1a3aff236406",
+    "ribbonDigest": "575abb15fb8fa7f7",
+    "segDigest": "447b6ddf0e89c6b5"
+  },
+  "monza": {
+    "smoothN": 5777,
+    "sidesN": 5777,
+    "sidesDigest": "ae00b2d38f779dc5",
+    "offsetDigest": "a1ae5b11a06170ff",
+    "ribbonDigest": "869c0ab1fdb175a0",
+    "segDigest": "32ee3dc4a7a01a75"
+  }
+}
